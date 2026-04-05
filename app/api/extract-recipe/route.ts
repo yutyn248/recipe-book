@@ -1,14 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextRequest, NextResponse } from "next/server";
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-
-function toInlineData(base64: string) {
-  return {
-    mimeType: (base64.startsWith("data:image/png") ? "image/png" : "image/jpeg") as "image/png" | "image/jpeg",
-    data: base64.replace(/^data:image\/\w+;base64,/, ""),
-  };
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,8 +7,6 @@ export async function POST(req: NextRequest) {
     if (!pages || pages.length === 0) {
       return NextResponse.json({ error: "画像が必要です" }, { status: 400 });
     }
-
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
     const pageNote = pages.length === 1
       ? "この画像から料理レシピを読み取ってください。"
@@ -32,35 +20,45 @@ export async function POST(req: NextRequest) {
   "title": "料理名",
   "genre": "和食",
   "ingredients": ["材料1（分量）", "材料2（分量）"],
-  "steps": ["手順1", "手順2"],
-  "foodPhotos": [
-    {
-      "pageIndex": 0,
-      "region": {
-        "topPercent": 0,
-        "leftPercent": 0,
-        "widthPercent": 100,
-        "heightPercent": 50
-      }
-    }
-  ]
+  "steps": ["手順1", "手順2"]
 }
 
 genreは以下の中から最も適切なものを1つ選んでください：和食, 洋食, 中華, イタリアン, 韓国料理, 肉・魚メイン, 麺・ごはん, スープ・汁物, サラダ・和え物, デザート・スイーツ
-foodPhotosについて：
-- 各ページ内で料理・食材の写真が写っている部分を検出してください
-- 1ページに複数の写真があれば複数エントリーを追加してください
-- 写真がなければ空配列にしてください
-- regionは画像全体に対するパーセンテージ（0〜100）で指定してください
-- タイトル・材料・手順が読み取れない場合はそれぞれ「不明な料理」または空配列にしてください`;
+タイトル・材料・手順が読み取れない場合はそれぞれ「不明な料理」または空配列にしてください。`;
 
-    const contents = [
-      prompt,
-      ...pages.map((p) => ({ inlineData: toInlineData(p) })),
-    ];
+    const imageContents = pages.map((p) => ({
+      type: "image_url" as const,
+      image_url: { url: p },
+    }));
 
-    const result = await model.generateContent(contents);
-    const text = result.response.text();
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              ...imageContents,
+            ],
+          },
+        ],
+        temperature: 0.1,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error?.message ?? "Groq APIエラー");
+    }
+
+    const data = await res.json();
+    const text = data.choices[0]?.message?.content ?? "";
 
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
@@ -70,7 +68,7 @@ foodPhotosについて：
     const recipe = JSON.parse(jsonMatch[0]);
     return NextResponse.json(recipe);
   } catch (error) {
-    console.error("Gemini API error:", error);
+    console.error("Groq API error:", error);
     return NextResponse.json({ error: "AIの処理中にエラーが発生しました" }, { status: 500 });
   }
 }
