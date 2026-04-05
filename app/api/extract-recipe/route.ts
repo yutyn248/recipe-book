@@ -9,22 +9,25 @@ export async function POST(req: NextRequest) {
     }
 
     const pageNote = pages.length === 1
-      ? "この画像から料理レシピを読み取ってください。"
+      ? "画像に写っている料理本のページを読み取ってください。"
       : `${pages.length}枚の画像は同じレシピのページです。すべてのページを合わせて1つのレシピとして読み取ってください。`;
 
     const prompt = `${pageNote}
 
-以下のJSON形式のみで返してください。JSON以外のテキストは一切含めないでください。
+【重要】画像に書かれているテキストを一字一句そのまま正確に読み取ること。要約・省略・推測は絶対にしないこと。
+- 材料は「醤油 大さじ1」「砂糖 小さじ2」のように分量まで必ず含める
+- 手順は本に書いてある文章をそのまま書き写す
+- 読み取れない文字があっても、読み取れた部分だけ正確に書く
 
-{
-  "title": "料理名",
-  "genre": "和食",
-  "ingredients": ["材料1（分量）", "材料2（分量）"],
-  "steps": ["手順1", "手順2"]
-}
+必ず以下のJSON形式だけで返すこと（前後に余計なテキスト不要）:
+{"title":"料理名","genre":"和食","ingredients":["材料1 分量","材料2 分量"],"steps":["手順1の文章","手順2の文章"]}
 
-genreは以下の中から最も適切なものを1つ選んでください：和食, 洋食, 中華, イタリアン, 韓国料理, 肉・魚メイン, 麺・ごはん, スープ・汁物, サラダ・和え物, デザート・スイーツ
-タイトル・材料・手順が読み取れない場合はそれぞれ「不明な料理」または空配列にしてください。`;
+genreは以下から最も適切なものを1つ：和食, 洋食, 中華, イタリアン, 韓国料理, 肉・魚メイン, 麺・ごはん, スープ・汁物, サラダ・和え物, デザート・スイーツ`;
+
+    console.log("pages count:", pages.length);
+    pages.forEach((p, i) => {
+      console.log(`page[${i}] prefix:`, p.slice(0, 40), "length:", p.length);
+    });
 
     const imageContents = pages.map((p) => ({
       type: "image_url" as const,
@@ -54,6 +57,7 @@ genreは以下の中から最も適切なものを1つ選んでください：�
 
     if (!res.ok) {
       const err = await res.json();
+      console.error("Groq error detail:", JSON.stringify(err));
       throw new Error(err.error?.message ?? "Groq APIエラー");
     }
 

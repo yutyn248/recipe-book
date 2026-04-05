@@ -70,7 +70,7 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const raw = e.target?.result as string;
-        const resized = await resizeImage(raw, 1600);
+        const resized = await resizeImage(raw, 1200);
         const img = new Image();
         img.onload = () => {
           const score = detectBlur(img);
