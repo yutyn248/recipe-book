@@ -1,26 +1,77 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #F4F1EB;
+  --surface: #FFFFFF;
+  --text-primary: #18160F;
+  --text-secondary: #8A8580;
+  --accent: #D4601F;
+  --accent-light: #F3E0CF;
+  --border: #E6E1DA;
+  --background: #F4F1EB;
+  --foreground: #18160F;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* iPhone safe area */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Hide scrollbar but allow scroll */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+.press-effect {
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+.press-effect:active {
+  transform: scale(0.96);
+  opacity: 0.85;
+}
+
+/* Minimal CSS spinner */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 2.5px solid var(--accent-light);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+/* FAB shadow */
+.fab-shadow {
+  box-shadow: 0 8px 24px rgba(212, 96, 31, 0.35), 0 2px 8px rgba(212, 96, 31, 0.2);
+}
+
+/* Card shadow */
+.card-shadow {
+  box-shadow: 0 1px 3px rgba(24, 22, 15, 0.06), 0 4px 16px rgba(24, 22, 15, 0.05);
 }
