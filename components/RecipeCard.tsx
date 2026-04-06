@@ -2,16 +2,15 @@
 
 import Link from "next/link";
 import { Recipe } from "@/types/recipe";
+import { RecipeMeta } from "@/lib/recipe-meta";
 
 interface RecipeCardProps {
   recipe: Recipe;
+  meta?: RecipeMeta;
+  isDuplicate?: boolean;
 }
 
-export default function RecipeCard({ recipe }: RecipeCardProps) {
-  const photoBlock = recipe.blocks.find((b) => b.type === "photo") as
-    | { type: "photo"; base64: string }
-    | undefined;
-
+export default function RecipeCard({ recipe, meta, isDuplicate }: RecipeCardProps) {
   const ingredientsBlock = recipe.blocks.find((b) => b.type === "ingredients") as
     | { type: "ingredients"; items: string[] }
     | undefined;
@@ -21,63 +20,52 @@ export default function RecipeCard({ recipe }: RecipeCardProps) {
   return (
     <Link href={`/recipes/${recipe.id}`} className="press-effect block">
       <div
-        className="rounded-2xl overflow-hidden card-shadow"
-        style={{ background: "var(--surface)" }}
+        className="rounded-2xl px-4 py-4 card-shadow"
+        style={{ background: "var(--surface)", outline: isDuplicate ? "1.5px solid #FECACA" : undefined }}
       >
-        {/* Portrait photo (3:4) */}
-        <div
-          className="w-full overflow-hidden relative"
-          style={{ aspectRatio: "3/4", background: "var(--accent-light)" }}
-        >
-          {photoBlock ? (
-            <img
-              src={photoBlock.base64}
-              alt={recipe.title}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)", opacity: 0.4 }}>
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                <circle cx="12" cy="13" r="4"/>
-              </svg>
-            </div>
-          )}
-
-          {/* Genre badge */}
-          {recipe.genre && (
-            <div
-              className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-xs font-semibold"
-              style={{
-                background: "rgba(255,255,255,0.88)",
-                color: "var(--text-primary)",
-                backdropFilter: "blur(6px)",
-              }}
+        <div className="flex items-start justify-between gap-1 mb-1">
+          <div className="flex-1 min-w-0">
+            {recipe.genre && (
+              <span
+                className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full mb-1.5"
+                style={{ background: "var(--accent-light)", color: "var(--accent)" }}
+              >
+                {recipe.genre}
+              </span>
+            )}
+            <h3
+              className="font-bold text-sm leading-snug line-clamp-2"
+              style={{ color: "var(--text-primary)" }}
             >
-              {recipe.genre}
-            </div>
+              {recipe.title}
+            </h3>
+            {meta?.lastCookedAt && (
+              <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                最終調理 {new Date(meta.lastCookedAt).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}
+              </p>
+            )}
+          </div>
+          {meta?.favorite && (
+            <span className="text-base leading-none mt-0.5 flex-shrink-0" style={{ color: "#F43F5E" }}>♥</span>
           )}
         </div>
-
-        {/* Info */}
-        <div className="px-3 pt-2.5 pb-3">
-          <h3
-            className="font-bold text-sm leading-snug line-clamp-2"
-            style={{ color: "var(--text-primary)" }}
-          >
-            {recipe.title}
-          </h3>
-          {(ingredientsBlock || stepCount > 0) && (
+        {(ingredientsBlock || stepCount > 0 || meta?.rating) && (
+          <div className="flex items-center justify-between mt-1.5">
             <p
-              className="text-xs mt-1 font-medium"
+              className="text-xs font-medium"
               style={{ color: "var(--text-secondary)" }}
             >
-              {ingredientsBlock ? `${ingredientsBlock.items.length}品` : ""}
+              {ingredientsBlock ? `材料 ${ingredientsBlock.items.length}品` : ""}
               {ingredientsBlock && stepCount > 0 ? " · " : ""}
               {stepCount > 0 ? `${stepCount}工程` : ""}
             </p>
-          )}
-        </div>
+            {meta?.rating && (
+              <span className="text-xs" style={{ color: "#F59E0B" }}>
+                {"★".repeat(meta.rating)}{"☆".repeat(5 - meta.rating)}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </Link>
   );

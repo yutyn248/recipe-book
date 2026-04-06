@@ -9,9 +9,16 @@ import { GENRES, Genre } from "@/types/recipe";
 import BlockEditor from "./BlockEditor";
 
 const BLUR_THRESHOLD = 50;
-const MAX_PAGES = 7;
+const MAX_PAGES = 4;
 
-type ModalStep = "select" | "processing" | "edit" | "confirm" | "done";
+type ModalStep = "select" | "processing" | "edit" | "confirm" | "multi-confirm" | "done";
+
+interface ExtractedRecipe {
+  title: string;
+  genre: Genre | null;
+  ingredients: string[];
+  steps: string[];
+}
 
 interface PageEntry {
   base64: string;
@@ -21,6 +28,7 @@ interface PageEntry {
 interface UploadModalProps {
   onClose: () => void;
   onSaved: () => void;
+  existingTitles: string[];
 }
 
 // Step dot indicator: 4 dots
@@ -44,18 +52,24 @@ function StepDots({ current }: { current: number }) {
   );
 }
 
-export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
+export default function UploadModal({ onClose, onSaved, existingTitles }: UploadModalProps) {
+  const isDuplicate = (t: string) =>
+    existingTitles.some((e) => e.trim() === t.trim());
   const [step, setStep] = useState<ModalStep>("select");
   const [pages, setPages] = useState<PageEntry[]>([]);
   const [blurError, setBlurError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
 
-  // edit step state
+  // edit step state (single recipe)
   const [title, setTitle] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
   const [genre, setGenre] = useState<Genre | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
+
+  // multi-recipe state
+  const [multiRecipes, setMultiRecipes] = useState<ExtractedRecipe[]>([]);
 
   const page1InputRef = useRef<HTMLInputElement>(null);
   const addPageInputRef = useRef<HTMLInputElement>(null);
@@ -119,6 +133,7 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
     if (pages.length === 0) return;
     setStep("processing");
     setError(null);
+    setErrorCode(null);
     setProgress("AIが写真を解析中...");
 
     try {
@@ -130,56 +145,43 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
 
       setProgress("レシピを整理中...");
 
+      const data = await res.json();
+
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "エラーが発生しました");
+        setError(data.error ?? "エラーが発生しました");
+        setErrorCode(data.errorCode ?? null);
+        setStep("select");
+        return;
       }
 
-      const extracted = await res.json();
+      const { recipes } = data as { recipes: ExtractedRecipe[] };
 
-      setProgress("料理写真を切り抜き中...");
-
-      // Build blocks
-      const newBlocks: Block[] = [];
-
-      // Photo blocks: crop food photos detected by Gemini
-      if (Array.isArray(extracted.foodPhotos) && extracted.foodPhotos.length > 0) {
-        for (const photo of extracted.foodPhotos) {
-          const pageIdx = photo.pageIndex ?? 0;
-          const page = pages[pageIdx];
-          if (!page) continue;
-          try {
-            const cropped = await cropPhoto(page.base64, photo.region);
-            newBlocks.push({ id: crypto.randomUUID(), type: "photo", base64: cropped });
-          } catch {
-            // If cropping fails, use the whole page
-            newBlocks.push({ id: crypto.randomUUID(), type: "photo", base64: page.base64 });
+      if (recipes.length > 1) {
+        setMultiRecipes(recipes.map((r) => ({
+          ...r,
+          genre: (GENRES.includes(r.genre as Genre) ? r.genre : null) as Genre | null,
+        })));
+        setStep("multi-confirm");
+      } else {
+        const extracted = recipes[0] ?? {};
+        const newBlocks: Block[] = [];
+        if (Array.isArray(extracted.ingredients) && extracted.ingredients.length > 0) {
+          newBlocks.push({ id: crypto.randomUUID(), type: "ingredients", items: extracted.ingredients });
+        }
+        if (Array.isArray(extracted.steps)) {
+          for (const s of extracted.steps) {
+            newBlocks.push({ id: crypto.randomUUID(), type: "step", text: s });
           }
         }
+        setTitle(extracted.title ?? "不明な料理");
+        setGenre((GENRES.includes(extracted.genre as Genre) ? extracted.genre : null) as Genre | null);
+        setBlocks(newBlocks);
+        setStep("edit");
       }
-
-      // Ingredients block
-      if (Array.isArray(extracted.ingredients) && extracted.ingredients.length > 0) {
-        newBlocks.push({
-          id: crypto.randomUUID(),
-          type: "ingredients",
-          items: extracted.ingredients,
-        });
-      }
-
-      // Step blocks
-      if (Array.isArray(extracted.steps)) {
-        for (const step of extracted.steps) {
-          newBlocks.push({ id: crypto.randomUUID(), type: "step", text: step });
-        }
-      }
-
-      setTitle(extracted.title ?? "不明な料理");
-      setGenre((GENRES.includes(extracted.genre) ? extracted.genre : null) as Genre | null);
-      setBlocks(newBlocks);
-      setStep("edit");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "エラーが発生しました");
+      // ネットワーク自体が繋がらない場合など
+      setError("サーバーへの接続に失敗しました。ネットワークを確認してください。");
+      setErrorCode("NETWORK_ERROR");
       setStep("select");
     }
   }
@@ -189,6 +191,10 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
   }
 
   async function handleSave() {
+    if (isDuplicate(title)) {
+      setError(`「${title.trim()}」は既に登録されています。別の名前にしてください。`);
+      return;
+    }
     await saveRecipe({
       id: crypto.randomUUID(),
       title,
@@ -208,6 +214,7 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
 
   // Map step to dot index
   const dotIndex = step === "select" ? 0 : step === "processing" ? 1 : step === "edit" ? 2 : 3;
+  const showDots = step !== "done" && step !== "multi-confirm";
 
   return (
     <div className="fixed inset-0 z-50">
@@ -229,7 +236,7 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
         </div>
 
         {/* Step dots */}
-        {step !== "done" && <StepDots current={dotIndex} />}
+        {showDots && <StepDots current={dotIndex} />}
 
         <div
           className="overflow-y-auto hide-scrollbar"
@@ -361,10 +368,20 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
 
                   {error && (
                     <div
-                      className="mb-4 px-3 py-2.5 rounded-xl text-sm"
-                      style={{ background: "#FEF2F2", color: "#DC2626" }}
+                      className="mb-4 px-4 py-3 rounded-xl"
+                      style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}
                     >
-                      {error}
+                      <p className="font-semibold text-sm mb-1" style={{ color: "#DC2626" }}>
+                        読み取りに失敗しました
+                      </p>
+                      <p className="text-xs leading-relaxed" style={{ color: "#EF4444" }}>
+                        {error}
+                      </p>
+                      {errorCode && (
+                        <p className="text-xs mt-1.5 font-mono" style={{ color: "#FCA5A5" }}>
+                          エラーコード: {errorCode}
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -455,7 +472,7 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
                     className="w-full font-black outline-none pb-1 bg-transparent"
                     style={{
                       color: "var(--text-primary)",
-                      borderBottom: "1.5px solid var(--accent)",
+                      borderBottom: `1.5px solid ${isDuplicate(title) ? "#DC2626" : "var(--accent)"}`,
                       fontSize: 16,
                     }}
                   />
@@ -465,7 +482,7 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
                     className="w-full text-left flex items-center justify-between rounded-xl px-4 py-3"
                     style={{
                       background: "var(--bg)",
-                      border: "1px solid #E8E4DF",
+                      border: `1px solid ${isDuplicate(title) ? "#FECACA" : "#E8E4DF"}`,
                     }}
                   >
                     <span
@@ -478,6 +495,11 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
                       編集
                     </span>
                   </button>
+                )}
+                {isDuplicate(title) && (
+                  <p className="text-xs mt-1.5 font-medium" style={{ color: "#DC2626" }}>
+                    「{title.trim()}」は既に登録されています。タップして名前を変更してください。
+                  </p>
                 )}
               </div>
 
@@ -522,10 +544,121 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
               <div className="px-5">
                 <button
                   onClick={handleConfirm}
+                  disabled={isDuplicate(title)}
                   className="press-effect w-full py-3.5 font-semibold text-base rounded-xl"
-                  style={{ background: "var(--accent)", color: "#fff" }}
+                  style={{
+                    background: isDuplicate(title) ? "var(--border)" : "var(--accent)",
+                    color: isDuplicate(title) ? "var(--text-secondary)" : "#fff",
+                  }}
                 >
                   確認する →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ════════════════════════════════
+              STEP: MULTI-CONFIRM
+          ════════════════════════════════ */}
+          {step === "multi-confirm" && (
+            <div className="pb-6">
+              <div className="px-5 flex items-center justify-between pt-2 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
+                <h2 className="text-base font-bold" style={{ color: "var(--text-primary)" }}>
+                  {multiRecipes.length}つのレシピを確認
+                </h2>
+              </div>
+
+              <div className="px-5 pt-4 space-y-4">
+                {multiRecipes.map((r, i) => (
+                  <div
+                    key={i}
+                    className="rounded-2xl overflow-hidden card-shadow"
+                    style={{ background: "var(--surface)" }}
+                  >
+                    {/* Recipe header */}
+                    <div className="px-4 pt-4 pb-3 flex items-start justify-between gap-2" style={{ borderBottom: "1px solid var(--border)" }}>
+                      <div className="flex-1">
+                        <h3 className="font-black text-base leading-tight" style={{ color: "var(--text-primary)" }}>{r.title || "不明な料理"}</h3>
+                        {r.genre && (
+                          <span className="inline-block mt-1 text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>
+                            {r.genre}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setMultiRecipes((prev) => prev.filter((_, idx) => idx !== i))}
+                        className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs"
+                        style={{ background: "#FEF2F2", color: "#DC2626" }}
+                      >✕</button>
+                    </div>
+
+                    {/* Ingredients */}
+                    {r.ingredients.length > 0 && (
+                      <div className="px-4 py-3" style={{ borderBottom: r.steps.length > 0 ? "1px solid var(--border)" : undefined }}>
+                        <p className="text-xs font-semibold mb-2" style={{ color: "var(--text-secondary)" }}>材料 {r.ingredients.length}品</p>
+                        <div className="space-y-1">
+                          {r.ingredients.slice(0, 5).map((item, j) => (
+                            <div key={j} className="flex items-center gap-2">
+                              <span className="w-1 h-1 rounded-full flex-shrink-0" style={{ background: "var(--accent)" }} />
+                              <span className="text-xs" style={{ color: "var(--text-primary)" }}>{item}</span>
+                            </div>
+                          ))}
+                          {r.ingredients.length > 5 && (
+                            <p className="text-xs" style={{ color: "var(--text-secondary)" }}>他 {r.ingredients.length - 5}品...</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Steps count */}
+                    {r.steps.length > 0 && (
+                      <div className="px-4 py-3">
+                        <p className="text-xs font-semibold" style={{ color: "var(--text-secondary)" }}>手順 {r.steps.length}ステップ</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="px-5 pt-5 space-y-2.5">
+                <button
+                  onClick={async () => {
+                    const dupes = multiRecipes.map((r) => r.title).filter((t) => isDuplicate(t));
+                    if (dupes.length > 0) {
+                      setError(`「${dupes.join("」「")}」は既に登録されています。`);
+                      return;
+                    }
+                    for (const r of multiRecipes) {
+                      const blocks: Block[] = [];
+                      if (r.ingredients.length > 0) {
+                        blocks.push({ id: crypto.randomUUID(), type: "ingredients", items: r.ingredients });
+                      }
+                      for (const s of r.steps) {
+                        blocks.push({ id: crypto.randomUUID(), type: "step", text: s });
+                      }
+                      await saveRecipe({
+                        id: crypto.randomUUID(),
+                        title: r.title || "不明な料理",
+                        genre: r.genre,
+                        blocks,
+                        originalImages: pages.map((p) => p.base64),
+                        createdAt: new Date().toISOString(),
+                      });
+                    }
+                    setStep("done");
+                    setTimeout(() => onSaved(), 800);
+                  }}
+                  className="press-effect w-full py-3.5 font-semibold text-base rounded-2xl"
+                  style={{ background: "var(--accent)", color: "#fff" }}
+                >
+                  {multiRecipes.length}つまとめて保存
+                </button>
+                <button
+                  onClick={() => { setPages([]); setMultiRecipes([]); setStep("select"); }}
+                  className="press-effect w-full py-3 font-semibold text-sm rounded-2xl"
+                  style={{ background: "var(--border)", color: "var(--text-secondary)" }}
+                >
+                  撮り直す
                 </button>
               </div>
             </div>
@@ -535,81 +668,100 @@ export default function UploadModal({ onClose, onSaved }: UploadModalProps) {
               STEP: CONFIRM
           ════════════════════════════════ */}
           {step === "confirm" && (
-            <div className="pb-10">
-              <div className="px-5 flex items-center justify-between mb-4 pt-2">
-                <button
-                  onClick={() => setStep("edit")}
-                  className="text-sm font-medium"
-                  style={{ color: "var(--accent)" }}
-                >
-                  ← 修正する
-                </button>
-                <h2
-                  className="text-base font-bold"
-                  style={{ color: "var(--text-primary)" }}
-                >
-                  最終確認
-                </h2>
-                <div className="w-16" />
+            <div className="pb-6">
+              {/* Header */}
+              <div className="px-5 flex items-center justify-between pt-2 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
+                <h2 className="text-base font-bold" style={{ color: "var(--text-primary)" }}>内容を確認</h2>
               </div>
 
-              <div className="px-5">
-                {/* Preview card */}
-                <div
-                  className="rounded-2xl overflow-hidden mb-5"
-                  style={{
-                    background: "var(--bg)",
-                    border: "1px solid #E8E4DF",
-                  }}
-                >
-                  <div
-                    className="w-full overflow-hidden"
-                    style={{ height: 160, background: "var(--accent-light)" }}
-                  >
-                    {previewPhoto ? (
-                      <img
-                        src={previewPhoto.base64}
-                        alt={title}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div
-                        className="w-full h-full flex items-center justify-center"
-                        style={{ background: "var(--accent-light)" }}
-                      >
-                        <span
-                          className="text-xs font-semibold tracking-widest uppercase"
-                          style={{ color: "var(--accent)", opacity: 0.5 }}
-                        >
-                          No Photo
-                        </span>
-                      </div>
+              {/* Full recipe preview */}
+              <div className="px-5 pt-4 space-y-5">
+
+                {/* Title + genre */}
+                <div>
+                  <div className="flex items-start gap-2 justify-between">
+                    <h3 className="text-xl font-black leading-tight flex-1" style={{ color: "var(--text-primary)" }}>{title}</h3>
+                    {genre && (
+                      <span className="flex-shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full mt-0.5" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>
+                        {genre}
+                      </span>
                     )}
-                  </div>
-                  <div className="px-4 py-3">
-                    <h3
-                      className="text-base font-bold"
-                      style={{ color: "var(--text-primary)" }}
-                    >
-                      {title}
-                    </h3>
-                    <div className="flex gap-3 mt-1.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-                      <span>{blocks.filter((b) => b.type === "photo").length}枚の写真</span>
-                      <span>·</span>
-                      <span>{blocks.filter((b) => b.type === "step").length}ステップ</span>
-                      <span>·</span>
-                      <span>材料{blocks.find((b) => b.type === "ingredients") ? "あり" : "なし"}</span>
-                    </div>
                   </div>
                 </div>
 
+                {/* Photo */}
+                {previewPhoto && (
+                  <div className="rounded-2xl overflow-hidden card-shadow" style={{ aspectRatio: "4/3" }}>
+                    <img src={previewPhoto.base64} alt={title} className="w-full h-full object-cover" />
+                  </div>
+                )}
+
+                {/* Ingredients */}
+                {(() => {
+                  const ing = blocks.find((b) => b.type === "ingredients") as { type: "ingredients"; items: string[] } | undefined;
+                  if (!ing) return null;
+                  return (
+                    <div>
+                      <h4 className="text-sm font-black mb-2" style={{ color: "var(--text-primary)" }}>材料</h4>
+                      <div className="rounded-2xl overflow-hidden card-shadow" style={{ background: "var(--surface)" }}>
+                        {ing.items.map((item, i) => (
+                          <div key={i} className="flex items-center px-4 py-2.5" style={{ borderBottom: i < ing.items.length - 1 ? "1px solid var(--border)" : undefined }}>
+                            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 mr-3" style={{ background: "var(--accent)" }} />
+                            <span className="text-sm" style={{ color: "var(--text-primary)" }}>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Steps */}
+                {(() => {
+                  const steps = blocks.filter((b) => b.type === "step") as { id: string; type: "step"; text: string }[];
+                  if (steps.length === 0) return null;
+                  return (
+                    <div>
+                      <h4 className="text-sm font-black mb-2" style={{ color: "var(--text-primary)" }}>手順</h4>
+                      <div className="space-y-2">
+                        {steps.map((s, i) => (
+                          <div key={s.id} className="flex gap-3 items-start px-4 py-3 rounded-2xl card-shadow" style={{ background: "var(--surface)" }}>
+                            <div className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center font-black text-xs" style={{ background: "var(--accent)", color: "#fff" }}>
+                              {i + 1}
+                            </div>
+                            <p className="text-sm leading-relaxed flex-1 mt-0.5" style={{ color: "var(--text-primary)" }}>{s.text}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Action buttons */}
+              <div className="px-5 pt-6 space-y-2.5">
                 <button
                   onClick={handleSave}
-                  className="press-effect w-full py-3.5 font-semibold text-base rounded-xl"
+                  className="press-effect w-full py-3.5 font-semibold text-base rounded-2xl"
                   style={{ background: "var(--accent)", color: "#fff" }}
                 >
                   保存する
                 </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setStep("edit")}
+                    className="press-effect py-3 font-semibold text-sm rounded-2xl"
+                    style={{ background: "var(--accent-light)", color: "var(--accent)" }}
+                  >
+                    自分で編集
+                  </button>
+                  <button
+                    onClick={() => { setPages([]); setBlocks([]); setStep("select"); }}
+                    className="press-effect py-3 font-semibold text-sm rounded-2xl"
+                    style={{ background: "var(--border)", color: "var(--text-secondary)" }}
+                  >
+                    撮り直す
+                  </button>
+                </div>
               </div>
             </div>
           )}

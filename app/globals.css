@@ -16,6 +16,10 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+button, a, [role="button"] {
+  touch-action: manipulation;
+}
+
 body {
   background: var(--bg);
   color: var(--text-primary);
@@ -29,6 +33,10 @@ body {
   padding-top: env(safe-area-inset-top);
 }
 .safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.pb-safe {
   padding-bottom: env(safe-area-inset-bottom);
 }
 

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import SwRegister from "@/components/SwRegister";
 
 export const metadata: Metadata = {
   title: "マイレシピ帳",
@@ -20,7 +21,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ja" className="h-full">
-      <body className="min-h-full bg-[#FAFAF8]">{children}</body>
+      <head>
+        <link rel="manifest" href="/manifest.json" />
+      </head>
+      <body className="min-h-full bg-[#FAFAF8]">
+        {children}
+        <SwRegister />
+      </body>
     </html>
   );
 }

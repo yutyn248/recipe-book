@@ -26,9 +26,10 @@ export async function getRecipeById(id: string): Promise<Recipe | null> {
 }
 
 export async function updateRecipe(updated: Recipe): Promise<void> {
+  const withTimestamp = { ...updated, updatedAt: new Date().toISOString() };
   const { error } = await supabase
     .from("recipes")
-    .update(recipeToRow(updated))
+    .update(recipeToRow(withTimestamp))
     .eq("id", updated.id);
   if (error) throw error;
 }
@@ -47,6 +48,7 @@ function rowToRecipe(row: any): Recipe {
     blocks: row.blocks ?? [],
     originalImages: row.original_images ?? [],
     createdAt: row.created_at,
+    updatedAt: row.updated_at ?? undefined,
   };
 }
 
@@ -58,5 +60,6 @@ function recipeToRow(r: Recipe) {
     blocks: r.blocks,
     original_images: r.originalImages,
     created_at: r.createdAt,
+    updated_at: r.updatedAt ?? null,
   };
 }

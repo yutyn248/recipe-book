@@ -1,0 +1,16 @@
+{
+  "name": "マイレシピ帳",
+  "short_name": "レシピ帳",
+  "description": "料理本をデジタル化する個人レシピ管理システム",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAFAF8",
+  "theme_color": "#D97706",
+  "icons": [
+    {
+      "src": "/next.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

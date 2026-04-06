@@ -1,3 +1,9 @@
+export interface HeroBlock {
+  id: string;
+  type: "hero";
+  base64: string;
+}
+
 export interface PhotoBlock {
   id: string;
   type: "photo";
@@ -16,4 +22,10 @@ export interface StepBlock {
   text: string;
 }
 
-export type Block = PhotoBlock | IngredientsBlock | StepBlock;
+export interface MemoBlock {
+  id: string;
+  type: "memo";
+  text: string;
+}
+
+export type Block = HeroBlock | PhotoBlock | IngredientsBlock | StepBlock | MemoBlock;

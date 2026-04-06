@@ -1,27 +1,55 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import UploadModal from "@/components/UploadModal";
 import RecipeCard from "@/components/RecipeCard";
 import { getRecipes } from "@/lib/storage";
-import { seedDummyData } from "@/lib/seed";
 import { Recipe, GENRES, Genre } from "@/types/recipe";
+import { getShoppingItems } from "@/lib/shopping";
+import { getAllMeta, RecipeMeta } from "@/lib/recipe-meta";
 
 export default function Home() {
+  const router = useRouter();
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [activeGenre, setActiveGenre] = useState<Genre | "すべて">("すべて");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showGenreSheet, setShowGenreSheet] = useState(false);
+  const [shoppingCount, setShoppingCount] = useState(0);
+  const [allMeta, setAllMeta] = useState<Record<string, RecipeMeta>>({});
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+
+  useEffect(() => {
+    setShoppingCount(getShoppingItems().filter((i) => !i.checked).length);
+    setAllMeta(getAllMeta());
+  }, []);
+
+  // レシピ画面から戻った時にメタを再取得
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        setAllMeta(getAllMeta());
+        setShoppingCount(getShoppingItems().filter((i) => !i.checked).length);
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   async function loadRecipes() {
-    setRecipes(await getRecipes());
+    // キャッシュがあれば即時表示
+    const cached = localStorage.getItem("recipes_cache");
+    if (cached) setRecipes(JSON.parse(cached));
+
+    // Supabaseから最新を取得して更新
+    const fresh = await getRecipes();
+    setRecipes(fresh);
+    localStorage.setItem("recipes_cache", JSON.stringify(fresh));
   }
 
   useEffect(() => {
-    (async () => {
-      await seedDummyData();
-      await loadRecipes();
-    })();
+    loadRecipes();
   }, []);
 
   function handleRecipeSaved() {
@@ -30,14 +58,26 @@ export default function Home() {
   }
 
   const filtered = recipes
+    .filter((r) => !showFavoritesOnly || allMeta[r.id]?.favorite)
     .filter((r) => activeGenre === "すべて" || r.genre === activeGenre)
     .filter((r) => {
       if (!searchQuery.trim()) return true;
       const q = searchQuery.trim().toLowerCase();
-      return r.title.toLowerCase().includes(q) || r.genre?.toLowerCase().includes(q);
+      if (r.title.toLowerCase().includes(q)) return true;
+      if (r.genre?.toLowerCase().includes(q)) return true;
+      const ing = r.blocks.find((b) => b.type === "ingredients") as { items: string[] } | undefined;
+      if (ing?.items.some((item) => item.toLowerCase().includes(q))) return true;
+      return false;
     });
 
   const allGenres: Array<Genre | "すべて"> = ["すべて", ...GENRES];
+
+  // 重複タイトル検出
+  const titleCounts = recipes.reduce<Record<string, number>>((acc, r) => {
+    acc[r.title] = (acc[r.title] ?? 0) + 1;
+    return acc;
+  }, {});
+  const duplicateTitles = new Set(Object.keys(titleCounts).filter((t) => titleCounts[t] > 1));
 
   return (
     <div className="min-h-screen" style={{ background: "var(--bg)" }}>
@@ -54,7 +94,7 @@ export default function Home() {
               My Kitchen
             </p>
             <h1
-              className="text-4xl font-black tracking-tight leading-none"
+              className="text-2xl font-black tracking-tight leading-none"
               style={{ color: "var(--text-primary)" }}
             >
               レシピ帳
@@ -68,18 +108,26 @@ export default function Home() {
               </p>
             )}
           </div>
-          {/* Recipe count ring */}
-          {recipes.length > 0 && (
-            <div
-              className="w-11 h-11 rounded-2xl flex items-center justify-center"
-              style={{ background: "var(--accent-light)" }}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)" }}>
-                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-              </svg>
-            </div>
-          )}
+          {/* Shopping cart button */}
+          <button
+            onClick={() => router.push("/shopping")}
+            className="press-effect relative w-11 h-11 rounded-2xl flex items-center justify-center"
+            style={{ background: "var(--accent-light)" }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)" }}>
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <path d="M16 10a4 4 0 0 1-8 0"/>
+            </svg>
+            {shoppingCount > 0 && (
+              <span
+                className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
+                style={{ background: "var(--accent)", color: "#fff" }}
+              >
+                {shoppingCount > 9 ? "9+" : shoppingCount}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
@@ -112,38 +160,47 @@ export default function Home() {
         </div>
       )}
 
-      {/* Genre filter */}
+      {/* Genre filter button */}
       {recipes.length > 0 && (
-        <div
-          className="flex gap-2 px-4 py-2.5 overflow-x-auto hide-scrollbar"
-          style={{ background: "var(--bg)" }}
-        >
-          {allGenres.map((g) => {
-            const count = g === "すべて"
-              ? recipes.length
-              : recipes.filter((r) => r.genre === g).length;
-            if (g !== "すべて" && count === 0) return null;
-            const active = activeGenre === g;
-            return (
-              <button
-                key={g}
-                onClick={() => setActiveGenre(g)}
-                className="press-effect flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-semibold transition-colors"
-                style={active
-                  ? { background: "var(--text-primary)", color: "#FFF8F0" }
-                  : { background: "var(--surface)", color: "var(--text-secondary)", border: "1px solid var(--border)" }
-                }
-              >
-                {g}
-                <span
-                  className="ml-1.5 tabular-nums"
-                  style={{ opacity: active ? 0.55 : 0.7 }}
-                >
-                  {count}
-                </span>
-              </button>
-            );
-          })}
+        <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setShowGenreSheet(true)}
+            className="press-effect flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-semibold"
+            style={{
+              background: activeGenre !== "すべて" ? "var(--text-primary)" : "var(--surface)",
+              color: activeGenre !== "すべて" ? "#FFF8F0" : "var(--text-secondary)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/>
+            </svg>
+            {activeGenre === "すべて" ? "ジャンル" : activeGenre}
+            <span className="tabular-nums text-xs" style={{ opacity: 0.6 }}>
+              {activeGenre === "すべて" ? recipes.length : recipes.filter((r) => r.genre === activeGenre).length}
+            </span>
+          </button>
+          <button
+            onClick={() => { setShowFavoritesOnly(!showFavoritesOnly); setAllMeta(getAllMeta()); }}
+            className="press-effect flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold"
+            style={{
+              background: showFavoritesOnly ? "#FFF1F2" : "var(--surface)",
+              color: showFavoritesOnly ? "#F43F5E" : "var(--text-secondary)",
+              border: showFavoritesOnly ? "1px solid #FECDD3" : "1px solid var(--border)",
+            }}
+          >
+            <span>{showFavoritesOnly ? "♥" : "♡"}</span>
+            お気に入り
+          </button>
+          {(activeGenre !== "すべて") && (
+            <button
+              onClick={() => setActiveGenre("すべて")}
+              className="press-effect text-xs font-medium px-2.5 py-1.5 rounded-lg"
+              style={{ color: "var(--text-secondary)", background: "var(--surface)", border: "1px solid var(--border)" }}
+            >
+              クリア
+            </button>
+          )}
         </div>
       )}
 
@@ -200,7 +257,7 @@ export default function Home() {
         ) : (
           <div className="grid grid-cols-2 gap-3">
             {filtered.map((recipe) => (
-              <RecipeCard key={recipe.id} recipe={recipe} />
+              <RecipeCard key={recipe.id} recipe={recipe} meta={allMeta[recipe.id]} isDuplicate={duplicateTitles.has(recipe.title)} />
             ))}
           </div>
         )}
@@ -223,10 +280,51 @@ export default function Home() {
         </div>
       )}
 
+      {/* ジャンル選択シート */}
+      {showGenreSheet && (
+        <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.35)" }} onClick={() => setShowGenreSheet(false)}>
+          <div className="w-full rounded-t-3xl" style={{ background: "var(--bg)" }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 rounded-full" style={{ background: "var(--border)" }} />
+            </div>
+            <p className="text-sm font-bold px-5 pt-2 pb-3" style={{ color: "var(--text-secondary)" }}>ジャンルで絞り込む</p>
+            <div className="pb-safe">
+              {allGenres.map((g) => {
+                const count = g === "すべて" ? recipes.length : recipes.filter((r) => r.genre === g).length;
+                if (g !== "すべて" && count === 0) return null;
+                const active = activeGenre === g;
+                return (
+                  <button
+                    key={g}
+                    onClick={() => { setActiveGenre(g); setShowGenreSheet(false); }}
+                    className="press-effect w-full flex items-center justify-between px-5 py-3.5 text-left"
+                    style={{ borderTop: "1px solid var(--border)" }}
+                  >
+                    <span className="text-sm font-medium" style={{ color: active ? "var(--accent)" : "var(--text-primary)" }}>
+                      {g}
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs tabular-nums" style={{ color: "var(--text-secondary)" }}>{count}</span>
+                      {active && (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)" }}>
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+              <div className="h-6" />
+            </div>
+          </div>
+        </div>
+      )}
+
       {showModal && (
         <UploadModal
           onClose={() => setShowModal(false)}
           onSaved={handleRecipeSaved}
+          existingTitles={recipes.map((r) => r.title)}
         />
       )}
     </div>

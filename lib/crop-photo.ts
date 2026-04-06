@@ -28,7 +28,7 @@ export function cropPhoto(base64: string, region: PhotoRegion): Promise<string> 
 }
 
 /** Resize image to max dimension before upload to save storage/bandwidth */
-export function resizeImage(base64: string, maxPx = 1600): Promise<string> {
+export function resizeImage(base64: string, maxPx = 1200): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -38,7 +38,7 @@ export function resizeImage(base64: string, maxPx = 1600): Promise<string> {
       canvas.height = img.height * scale;
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL("image/jpeg", 0.88));
+      resolve(canvas.toDataURL("image/jpeg", 0.72));
     };
     img.src = base64;
   });
