@@ -87,6 +87,7 @@ genreは以下から最も適切なものを1つ：和食, 洋食, 中華, イ�
           },
         ],
         temperature: 0.1,
+        max_tokens: 8192,
       }),
     });
   } catch (err) {
@@ -154,8 +155,12 @@ genreは以下から最も適切なものを1つ：和食, 洋食, 中華, イ�
     parsed = JSON.parse(jsonMatch[0]);
   } catch {
     console.error("[JSON_PARSE_ERROR] raw JSON:", jsonMatch[0].slice(0, 500));
+    // 末尾が切れている場合は枚数を減らすよう促す
+    const isTruncated = !jsonMatch[0].trimEnd().endsWith("}");
     return apiError(
-      "レシピデータの解析に失敗しました（不正なJSON）。写真を撮り直して再試行してください。",
+      isTruncated
+        ? "AIの返答が途中で切れました。画像の枚数を減らして再試行してください。"
+        : "レシピデータの解析に失敗しました。画像をより鮮明にして再試行してください。",
       "JSON_PARSE_ERROR",
       500
     );
