@@ -9,7 +9,7 @@ import { GENRES, Genre } from "@/types/recipe";
 import BlockEditor from "./BlockEditor";
 
 const BLUR_THRESHOLD = 50;
-const MAX_PAGES = 4;
+const MAX_PAGES = 7;
 
 type ModalStep = "select" | "processing" | "edit" | "confirm" | "multi-confirm" | "done";
 
