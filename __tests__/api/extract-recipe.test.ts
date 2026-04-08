@@ -12,6 +12,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  mockFetch.mockReset();
 });
 
 function makeRequest(body: object) {
@@ -23,136 +24,241 @@ function makeRequest(body: object) {
 }
 
 function groqOkResponse(content: string) {
-  return Promise.resolve({
+  return {
     ok: true,
+    status: 200,
+    headers: { get: () => null },
     json: () => Promise.resolve({ choices: [{ message: { content } }] }),
-  });
+  };
 }
 
-describe("POST /api/extract-recipe", () => {
-  describe("バリデーション", () => {
-    it("GROQ_API_KEY が未設定の場合 500 を返す", async () => {
-      vi.stubEnv("GROQ_API_KEY", "");
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      expect(res.status).toBe(500);
-      const body = await res.json();
-      expect(body.errorCode).toBe("API_KEY_MISSING");
-    });
+function groq429Response() {
+  return {
+    ok: false,
+    status: 429,
+    headers: { get: (h: string) => h === "retry-after" ? "0" : null },
+    json: () => Promise.resolve({ error: { message: "Rate limit exceeded", type: "rate_limit_error" } }),
+  };
+}
 
-    it("pages が空の場合 400 を返す", async () => {
-      const res = await POST(makeRequest({ pages: [] }));
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.errorCode).toBe("NO_IMAGES");
-    });
+const validRecipe = (title: string) => ({
+  title, genre: "和食", ingredients: ["鶏肉 300g"], steps: ["切る", "焼く"],
+});
+
+// ── バリデーション ────────────────────────────────────────────────
+describe("バリデーション", () => {
+  it("GROQ_API_KEY が未設定の場合 500 を返す", async () => {
+    vi.stubEnv("GROQ_API_KEY", "");
+    const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.errorCode).toBe("API_KEY_MISSING");
   });
 
-  describe("Groq API エラーハンドリング", () => {
-    it("401 の場合 APIキー無効エラーを返す", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        json: () => Promise.resolve({ error: { message: "Invalid API key" } }),
-      });
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      expect(res.status).toBe(502);
-      const body = await res.json();
-      expect(body.errorCode).toBe("GROQ_API_ERROR");
-      expect(body.error).toContain("401");
-    });
+  it("pages が空の場合 400 を返す", async () => {
+    const res = await POST(makeRequest({ pages: [] }));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.errorCode).toBe("NO_IMAGES");
+  });
+});
 
-    it("429 の場合レート制限エラーを返す", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 429,
-        json: () => Promise.resolve({ error: { message: "Rate limit exceeded" } }),
-      });
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      const body = await res.json();
-      expect(body.error).toContain("429");
-    });
-
-    it("fetch 自体が失敗した場合 NETWORK_ERROR を返す", async () => {
-      mockFetch.mockRejectedValueOnce(new Error("Failed to fetch"));
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      expect(res.status).toBe(503);
-      const body = await res.json();
-      expect(body.errorCode).toBe("NETWORK_ERROR");
-    });
+// ── 1枚処理（基本） ────────────────────────────────────────────
+describe("1枚処理", () => {
+  it("正常な1レシピを返す", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.recipes).toHaveLength(1);
+    expect(body.recipes[0].title).toBe("唐揚げ");
   });
 
-  describe("レスポンス解析", () => {
-    it("AIの返答が空の場合 EMPTY_RESPONSE を返す", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ choices: [{ message: { content: "" } }] }),
-      });
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      const body = await res.json();
-      expect(body.errorCode).toBe("EMPTY_RESPONSE");
-    });
+  it("1ページに複数レシピがある場合すべて返す", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+      recipes: [validRecipe("唐揚げ"), validRecipe("味噌汁")],
+    })));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    const body = await res.json();
+    expect(body.recipes).toHaveLength(2);
+  });
 
-    it("JSONが含まれない場合 JSON_NOT_FOUND を返す", async () => {
-      mockFetch.mockResolvedValueOnce(groqOkResponse("レシピが見つかりませんでした。"));
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      const body = await res.json();
-      expect(body.errorCode).toBe("JSON_NOT_FOUND");
-    });
+  it("AIが余分なテキストを含んでいてもJSONを抽出できる", async () => {
+    const messyResponse = `こちらがレシピです：\n${JSON.stringify({ recipes: [validRecipe("味噌汁")] })}\n以上です。`;
+    mockFetch.mockResolvedValueOnce(groqOkResponse(messyResponse));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.recipes[0].title).toBe("味噌汁");
+  });
 
-    it("不正なJSONの場合 JSON_PARSE_ERROR を返す", async () => {
-      mockFetch.mockResolvedValueOnce(groqOkResponse("{ invalid json }"));
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      const body = await res.json();
-      expect(body.errorCode).toBe("JSON_PARSE_ERROR");
-    });
+  it("JSONの後に余計な波括弧があっても正しく抽出できる（最初の完全なJSONのみ取得）", async () => {
+    const tricky = `${JSON.stringify({ recipes: [validRecipe("唐揚げ")] })} 注意: {NG}`;
+    mockFetch.mockResolvedValueOnce(groqOkResponse(tricky));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.recipes[0].title).toBe("唐揚げ");
+  });
 
-    it("タイトルがないレシピの場合 NO_RECIPE_FOUND を返す", async () => {
-      mockFetch.mockResolvedValueOnce(groqOkResponse('{"recipes":[{"ingredients":[],"steps":[]}]}'));
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      const body = await res.json();
-      expect(body.errorCode).toBe("NO_RECIPE_FOUND");
-    });
+  it("制御文字が含まれていてもパースできる", async () => {
+    const withControl = JSON.stringify({ recipes: [validRecipe("唐揚げ")] }).replace("唐揚げ", "唐揚げ\x01\x08");
+    mockFetch.mockResolvedValueOnce(groqOkResponse(withControl));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(200);
+  });
+});
 
-    it("正常な1レシピを返す", async () => {
-      const validResponse = JSON.stringify({
-        recipes: [{
-          title: "唐揚げ",
-          genre: "和食",
-          ingredients: ["鶏もも肉 300g", "醤油 大さじ2"],
-          steps: ["鶏肉を切る", "揚げる"],
-        }],
-      });
-      mockFetch.mockResolvedValueOnce(groqOkResponse(validResponse));
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.recipes).toHaveLength(1);
-      expect(body.recipes[0].title).toBe("唐揚げ");
-      expect(body.recipes[0].ingredients).toHaveLength(2);
-    });
+// ── 複数ページ処理 ────────────────────────────────────────────
+describe("複数ページ処理", () => {
+  it("2枚：1枚目のレシピを抽出し2枚目で精錬する（2回APIを呼ぶ）", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    const res = await POST(makeRequest({ pages: ["img1", "img2"] }));
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  }, 10000);
 
-    it("複数レシピを正常に返す", async () => {
-      const validResponse = JSON.stringify({
-        recipes: [
-          { title: "唐揚げ", genre: "和食", ingredients: ["鶏肉"], steps: ["揚げる"] },
-          { title: "カレー", genre: "洋食", ingredients: ["玉ねぎ"], steps: ["炒める"] },
-        ],
-      });
-      mockFetch.mockResolvedValueOnce(groqOkResponse(validResponse));
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      const body = await res.json();
-      expect(body.recipes).toHaveLength(2);
-    });
+  it("2枚目に新しいレシピがあれば追加される（今回の修正の核心）", async () => {
+    // img1: レシピAとB、img2の精錬後: A、B、C、Dすべて返る
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+      recipes: [validRecipe("唐揚げ"), validRecipe("味噌汁")],
+    })));
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+      recipes: [validRecipe("唐揚げ"), validRecipe("味噌汁"), validRecipe("カレー"), validRecipe("サラダ")],
+    })));
+    const res = await POST(makeRequest({ pages: ["img1", "img2"] }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.recipes).toHaveLength(4);
+    const titles = body.recipes.map((r: { title: string }) => r.title);
+    expect(titles).toContain("カレー");
+    expect(titles).toContain("サラダ");
+  }, 10000);
 
-    it("AIが余分なテキストを含んでいてもJSONを抽出できる", async () => {
-      const messyResponse = `こちらがレシピです：\n${ JSON.stringify({
-        recipes: [{ title: "味噌汁", genre: "和食", ingredients: ["豆腐"], steps: ["煮る"] }],
-      })}\n以上です。`;
-      mockFetch.mockResolvedValueOnce(groqOkResponse(messyResponse));
-      const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.recipes[0].title).toBe("味噌汁");
+  it("手順が2枚目で統合されても最終的なレシピが返る", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+      recipes: [{ title: "唐揚げ", genre: "和食", ingredients: ["鶏肉"], steps: ["鶏肉を切る（途中"] }],
+    })));
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+      recipes: [{ title: "唐揚げ", genre: "和食", ingredients: ["鶏肉"], steps: ["鶏肉を切る（完成）", "揚げる"] }],
+    })));
+    const res = await POST(makeRequest({ pages: ["img1", "img2"] }));
+    const body = await res.json();
+    expect(body.recipes[0].steps).toContain("揚げる");
+  }, 10000);
+
+  it("3枚：順番にAPIを呼んで最終結果を返す", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("A")] })));
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("A"), validRecipe("B")] })));
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("A"), validRecipe("B"), validRecipe("C")] })));
+    const res = await POST(makeRequest({ pages: ["p1", "p2", "p3"] }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.recipes).toHaveLength(3);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  }, 15000);
+
+  it("1枚目が無関係な写真でも2枚目でレシピを取得できる", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse('{"recipes": []}'));
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    const res = await POST(makeRequest({ pages: ["unrelated", "recipe"] }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.recipes[0].title).toBe("唐揚げ");
+  }, 10000);
+
+  it("精錬ページでJSONが取れなくても前の結果を維持する", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    mockFetch.mockResolvedValueOnce(groqOkResponse("解析できませんでした"));
+    const res = await POST(makeRequest({ pages: ["img1", "img2"] }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.recipes[0].title).toBe("唐揚げ");
+  }, 10000);
+});
+
+// ── 429 リトライ ────────────────────────────────────────────
+describe("429 レート制限リトライ", () => {
+  it("1回目429 → 2回目成功でリトライが機能する", async () => {
+    mockFetch.mockResolvedValueOnce(groq429Response());
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("2回目も429 → 3回目成功でリトライが機能する", async () => {
+    mockFetch.mockResolvedValueOnce(groq429Response());
+    mockFetch.mockResolvedValueOnce(groq429Response());
+    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("3回連続429はエラーを返す（リトライ上限）", async () => {
+    mockFetch.mockResolvedValue(groq429Response());
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.errorCode).toBe("GROQ_API_ERROR");
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ── エラーハンドリング ────────────────────────────────────────────
+describe("エラーハンドリング", () => {
+  it("401 の場合 APIキー無効エラーを返す", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false, status: 401,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ error: { message: "Invalid API key" } }),
     });
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.errorCode).toBe("GROQ_API_ERROR");
+    expect(body.error).toContain("401");
+  });
+
+  it("fetch 自体が失敗した場合 NETWORK_ERROR を返す", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("Failed to fetch"));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.errorCode).toBe("NETWORK_ERROR");
+  });
+
+  it("AIの返答が空の場合 EMPTY_RESPONSE を返す", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true, status: 200,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ choices: [{ message: { content: "" } }] }),
+    });
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    const body = await res.json();
+    expect(body.errorCode).toBe("EMPTY_RESPONSE");
+  });
+
+  it("JSONが含まれない場合 JSON_NOT_FOUND を返す", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse("レシピが見つかりませんでした。"));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    const body = await res.json();
+    expect(body.errorCode).toBe("JSON_NOT_FOUND");
+  });
+
+  it("不正なJSONの場合 JSON_PARSE_ERROR を返す", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse("{ invalid json }"));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    const body = await res.json();
+    expect(body.errorCode).toBe("JSON_PARSE_ERROR");
+  });
+
+  it("タイトルがないレシピの場合 NO_RECIPE_FOUND を返す", async () => {
+    mockFetch.mockResolvedValueOnce(groqOkResponse('{"recipes":[{"ingredients":[],"steps":[]}]}'));
+    const res = await POST(makeRequest({ pages: ["img1"] }));
+    const body = await res.json();
+    expect(body.errorCode).toBe("NO_RECIPE_FOUND");
   });
 });
