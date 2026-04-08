@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { detectBlur } from "@/lib/blur-detection";
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { detectBlur, detectBrightness } from "@/lib/blur-detection";
 import { cropPhoto, resizeImage } from "@/lib/crop-photo";
 import { saveRecipe } from "@/lib/storage";
 import { Block } from "@/types/block";
@@ -9,7 +15,8 @@ import { GENRES, Genre } from "@/types/recipe";
 import BlockEditor from "./BlockEditor";
 
 const BLUR_THRESHOLD = 50;
-const MAX_PAGES = 7;
+const BRIGHTNESS_THRESHOLD = 40; // 0–255スケール
+const MAX_PAGES = 12;
 
 type ModalStep = "select" | "processing" | "edit" | "confirm" | "multi-confirm" | "done";
 
@@ -21,6 +28,7 @@ interface ExtractedRecipe {
 }
 
 interface PageEntry {
+  id: string;
   base64: string;
   blurScore: number;
 }
@@ -29,6 +37,48 @@ interface UploadModalProps {
   onClose: () => void;
   onSaved: () => void;
   existingTitles: string[];
+}
+
+// ドラッグ可能なページサムネイル
+function SortablePageThumb({
+  page,
+  index,
+  onRemove,
+}: {
+  page: PageEntry;
+  index: number;
+  onRemove: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: page.id });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : 1,
+        touchAction: "none",
+      }}
+      {...attributes}
+      {...listeners}
+      className="relative"
+    >
+      <div className="rounded-xl overflow-hidden bg-gray-100 aspect-[3/4]">
+        <img src={page.base64} alt={`${index + 1}枚目`} className="w-full h-full object-cover" />
+      </div>
+      <button
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={onRemove}
+        className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-xs"
+        style={{ background: "rgba(26,23,18,0.5)", color: "#fff" }}
+      >
+        ✕
+      </button>
+      <p className="text-xs mt-1 font-medium text-center" style={{ color: "#16A34A" }}>
+        ✓ {page.blurScore}%
+      </p>
+    </div>
+  );
 }
 
 // Step dot indicator: 4 dots
@@ -74,6 +124,10 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
   const page1InputRef = useRef<HTMLInputElement>(null);
   const addPageInputRef = useRef<HTMLInputElement>(null);
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = ""; };
@@ -87,8 +141,19 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
         const resized = await resizeImage(raw, 1200);
         const img = new Image();
         img.onload = () => {
-          const score = detectBlur(img);
-          resolve(score < BLUR_THRESHOLD ? null : { base64: resized, blurScore: score });
+          const blurScore = detectBlur(img);
+          if (blurScore < BLUR_THRESHOLD) {
+            setBlurError("写真がぼやけています。明るい場所でカメラを固定して撮り直してください。");
+            resolve(null);
+            return;
+          }
+          const brightness = detectBrightness(img);
+          if (brightness < BRIGHTNESS_THRESHOLD) {
+            setBlurError("写真が暗すぎます。照明のある明るい場所で撮り直してください。");
+            resolve(null);
+            return;
+          }
+          resolve({ id: crypto.randomUUID(), base64: resized, blurScore });
         };
         img.src = resized;
       };
@@ -103,10 +168,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     setError(null);
 
     const entry = await readAndCheck(file);
-    if (!entry) {
-      setBlurError("写真がぼやけています。明るい場所でカメラを固定して撮り直してください。");
-      return;
-    }
+    if (!entry) return; // エラーは readAndCheck 内部でセット済み
     setPages([entry]);
   }
 
@@ -117,16 +179,32 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     e.target.value = "";
 
     const entry = await readAndCheck(file);
-    if (!entry) {
-      setBlurError("写真がぼやけています。撮り直してください。");
-      return;
-    }
-    setPages((prev) => [...prev, entry]);
+    if (!entry) return; // エラーは readAndCheck 内部でセット済み
+
+    setPages((prev) => {
+      // 重複ページ検出（同じ画像を2回追加しないよう base64 の先頭で比較）
+      if (prev.some((p) => p.base64.slice(0, 500) === entry.base64.slice(0, 500))) {
+        setBlurError("同じページが既に追加されています。");
+        return prev;
+      }
+      return [...prev, entry];
+    });
   }
 
-  function removePage(index: number) {
-    setPages((prev) => prev.filter((_, i) => i !== index));
+  function removePage(id: string) {
+    setPages((prev) => prev.filter((p) => p.id !== id));
     setBlurError(null);
+  }
+
+  function handlePageDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setPages((prev) => {
+        const oldIdx = prev.findIndex((p) => p.id === active.id);
+        const newIdx = prev.findIndex((p) => p.id === over.id);
+        return arrayMove(prev, oldIdx, newIdx);
+      });
+    }
   }
 
   async function handleExtract() {
@@ -299,10 +377,10 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                   </div>
                   <div className="text-center">
                     <p className="font-semibold" style={{ color: "var(--text-primary)" }}>
-                      料理本を撮影
+                      写真を選ぶ・撮影する
                     </p>
                     <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
-                      テキストが含まれるページを撮影してください
+                      アルバムから選ぶか、カメラで撮影してください
                     </p>
                   </div>
                 </button>
@@ -319,52 +397,50 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                       {pages.length}/{MAX_PAGES}枚
                     </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-2 mb-4">
-                    {pages.map((page, i) => (
-                      <div key={i} className="relative">
-                        <div className="rounded-xl overflow-hidden bg-gray-100 aspect-[3/4]">
-                          <img
-                            src={page.base64}
-                            alt={`${i + 1}枚目`}
-                            className="w-full h-full object-cover"
+                  <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handlePageDragEnd}>
+                    <SortableContext items={pages.map((p) => p.id)} strategy={rectSortingStrategy}>
+                      <div className="grid grid-cols-3 gap-2 mb-2">
+                        {pages.map((page, i) => (
+                          <SortablePageThumb
+                            key={page.id}
+                            page={page}
+                            index={i}
+                            onRemove={() => removePage(page.id)}
                           />
-                        </div>
-                        <button
-                          onClick={() => removePage(i)}
-                          className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-xs"
-                          style={{ background: "rgba(26,23,18,0.5)", color: "#fff" }}
-                        >
-                          ✕
-                        </button>
-                        <p
-                          className="text-xs mt-1 font-medium text-center"
-                          style={{ color: "#16A34A" }}
-                        >
-                          ✓ {page.blurScore}%
-                        </p>
+                        ))}
+                        {pages.length < MAX_PAGES && (
+                          <button
+                            onClick={() => addPageInputRef.current?.click()}
+                            className="press-effect rounded-xl aspect-[3/4] flex flex-col items-center justify-center gap-1"
+                            style={{
+                              border: "1.5px dashed #D5CFC8",
+                              background: "var(--bg)",
+                            }}
+                          >
+                            <span className="text-lg" style={{ color: "var(--accent)" }}>＋</span>
+                            <span
+                              className="text-xs font-semibold text-center"
+                              style={{ color: "var(--text-secondary)" }}
+                            >
+                              ページを
+                              <br />
+                              追加
+                            </span>
+                          </button>
+                        )}
                       </div>
-                    ))}
-                    {pages.length < MAX_PAGES && (
-                      <button
-                        onClick={() => addPageInputRef.current?.click()}
-                        className="press-effect rounded-xl aspect-[3/4] flex flex-col items-center justify-center gap-1"
-                        style={{
-                          border: "1.5px dashed #D5CFC8",
-                          background: "var(--bg)",
-                        }}
-                      >
-                        <span className="text-lg" style={{ color: "var(--accent)" }}>＋</span>
-                        <span
-                          className="text-xs font-semibold text-center"
-                          style={{ color: "var(--text-secondary)" }}
-                        >
-                          ページを
-                          <br />
-                          追加
-                        </span>
-                      </button>
-                    )}
-                  </div>
+                    </SortableContext>
+                  </DndContext>
+                  {pages.length >= 2 && (
+                    <p className="text-xs mb-3 px-1 leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                      長押しでページの順番を並び替えできます。見開きページは片面ずつ撮影すると精度が上がります。
+                    </p>
+                  )}
+                  {pages.length === 1 && (
+                    <p className="text-xs mb-3 px-1" style={{ color: "var(--text-secondary)" }}>
+                      手書きレシピは文字が鮮明に写るように撮影してください。
+                    </p>
+                  )}
 
                   {error && (
                     <div
@@ -399,7 +475,6 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 ref={page1InputRef}
                 type="file"
                 accept="image/*"
-                capture="environment"
                 className="hidden"
                 onChange={handlePage1}
               />
@@ -407,7 +482,6 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 ref={addPageInputRef}
                 type="file"
                 accept="image/*"
-                capture="environment"
                 className="hidden"
                 onChange={handleAddPage}
               />

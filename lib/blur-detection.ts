@@ -57,3 +57,23 @@ function computeVariance(values: number[]): number {
   const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
   return variance;
 }
+
+/**
+ * Average luminance detection.
+ * Returns brightness 0–255. Below threshold = too dark.
+ */
+export function detectBrightness(imageElement: HTMLImageElement): number {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d")!;
+  const maxSize = 200;
+  const scale = Math.min(maxSize / imageElement.width, maxSize / imageElement.height, 1);
+  canvas.width = imageElement.width * scale;
+  canvas.height = imageElement.height * scale;
+  ctx.drawImage(imageElement, 0, 0, canvas.width, canvas.height);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let sum = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+  }
+  return sum / (data.length / 4);
+}
