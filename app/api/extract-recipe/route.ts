@@ -45,11 +45,14 @@ type GroqResult =
   | { ok: false; type: "network"; msg: string }
   | { ok: false; type: "api"; status: number; groqMsg: string; groqType: string };
 
-/** Groq Vision APIを1枚の画像で呼び出す */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Groq Vision APIを1枚の画像で呼び出す（429時は自動リトライ） */
 async function callGroqVision(
   apiKey: string,
   imageUrl: string,
-  promptText: string
+  promptText: string,
+  retryCount = 0
 ): Promise<GroqResult> {
   let res: Response;
   try {
@@ -77,6 +80,15 @@ async function callGroqVision(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, type: "network", msg };
+  }
+
+  // 429 レート制限: Retry-After ヘッダーを見て待機してリトライ（最大2回）
+  if (res.status === 429 && retryCount < 2) {
+    const retryAfter = parseInt(res.headers.get("retry-after") ?? "10", 10);
+    const waitMs = Math.min(retryAfter * 1000, 30000); // 最大30秒
+    console.warn(`[RATE_LIMIT] 429 received, waiting ${waitMs}ms before retry ${retryCount + 1}`);
+    await sleep(waitMs);
+    return callGroqVision(apiKey, imageUrl, promptText, retryCount + 1);
   }
 
   if (!res.ok) {
@@ -216,6 +228,8 @@ export async function POST(req: NextRequest) {
     let accumulatedJson = extractBalancedJson(finalText) ?? '{"recipes": []}';
 
     for (let i = 1; i < pages.length; i++) {
+      // ページ間に1秒待機してレート制限を回避
+      await sleep(1000);
       const refinePrompt = buildRefinePrompt(accumulatedJson, i + 1, pages.length);
       const result = await callGroqVision(apiKey, pages[i], refinePrompt);
 
