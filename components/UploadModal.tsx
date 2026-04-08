@@ -190,7 +190,8 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     const { entry, warning } = await readAndCheck(file);
 
     // 重複チェック
-    const isDup = pages.some((p) => p.base64.slice(0, 500) === entry.base64.slice(0, 500));
+    // 完全一致で比較（先頭だけだと似た背景のスクショで誤検出する）
+    const isDup = pages.some((p) => p.base64 === entry.base64);
     if (isDup) {
       setBlurError("同じページが既に追加されています。");
       return;
