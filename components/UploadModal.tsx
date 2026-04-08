@@ -108,6 +108,8 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
   const [step, setStep] = useState<ModalStep>("select");
   const [inputMode, setInputMode] = useState<"photo" | "url">("photo");
   const [urlInput, setUrlInput] = useState("");
+  const [urlSource, setUrlSource] = useState<"ai" | "json-ld" | null>(null);
+  const [extractedUrl, setExtractedUrl] = useState<string | null>(null);
   const [pages, setPages] = useState<PageEntry[]>([]);
   const [blurError, setBlurError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -291,7 +293,9 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
         return;
       }
 
-      const { recipes } = data as { recipes: ExtractedRecipe[] };
+      const { recipes, source } = data as { recipes: ExtractedRecipe[]; source?: "ai" | "json-ld" };
+      setUrlSource(source ?? "ai");
+      setExtractedUrl(trimmed);
 
       if (recipes.length > 1) {
         setMultiRecipes(recipes.map((r) => ({
@@ -336,7 +340,8 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
       title,
       genre,
       blocks,
-      originalImages: pages.map((p) => p.base64),
+      // URL経由の場合はURLをevidenceとして保存、写真の場合はbase64を保存
+      originalImages: extractedUrl ? [extractedUrl] : pages.map((p) => p.base64),
       createdAt: new Date().toISOString(),
     });
     setStep("done");
@@ -656,6 +661,21 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 <div className="w-12" />
               </div>
 
+              {/* AI解析の場合のみ注意バナー */}
+              {urlSource === "ai" && (
+                <div
+                  className="mx-5 mb-4 px-4 py-3 rounded-xl"
+                  style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}
+                >
+                  <p className="text-xs font-semibold mb-0.5" style={{ color: "#92400E" }}>
+                    内容を確認してください
+                  </p>
+                  <p className="text-xs leading-relaxed" style={{ color: "#B45309" }}>
+                    AIによる解析のため、材料の分量や手順が一部不正確な場合があります。保存前に内容を確認・修正してください。
+                  </p>
+                </div>
+              )}
+
               {/* Title edit */}
               <div className="px-5 mb-4">
                 <p
@@ -843,7 +863,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                         title: r.title || "不明な料理",
                         genre: r.genre,
                         blocks,
-                        originalImages: pages.map((p) => p.base64),
+                        originalImages: extractedUrl ? [extractedUrl] : pages.map((p) => p.base64),
                         createdAt: new Date().toISOString(),
                       });
                     }

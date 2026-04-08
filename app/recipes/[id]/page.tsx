@@ -827,6 +827,12 @@ function ViewBlocks({
 // ─── 元の写真（折りたたみ） ──────────────────────────────────
 function OriginalImages({ images }: { images: string[] }) {
   const [open, setOpen] = useState(false);
+  const urls = images.filter((img) => img.startsWith("http"));
+  const photos = images.filter((img) => !img.startsWith("http"));
+  const label = urls.length > 0 && photos.length === 0
+    ? "参照元URL"
+    : `元の写真 (${photos.length}枚)`;
+
   return (
     <section>
       <button
@@ -834,7 +840,7 @@ function OriginalImages({ images }: { images: string[] }) {
         className="press-effect w-full flex items-center justify-between py-2"
       >
         <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
-          元の写真 ({images.length}枚)
+          {label}
         </span>
         <svg
           width="14" height="14" viewBox="0 0 24 24" fill="none"
@@ -845,10 +851,30 @@ function OriginalImages({ images }: { images: string[] }) {
         </svg>
       </button>
       {open && (
-        <div className="grid grid-cols-2 gap-2 mt-2">
-          {images.map((img, i) => (
-            <img key={i} src={img} alt={`元ページ${i + 1}`} className="w-full rounded-xl" />
+        <div className="mt-2 space-y-2">
+          {urls.map((url, i) => (
+            <a
+              key={i}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs break-all"
+              style={{ background: "var(--bg)", color: "var(--accent)", border: "1px solid var(--border)" }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+              {url}
+            </a>
           ))}
+          {photos.length > 0 && (
+            <div className="grid grid-cols-2 gap-2">
+              {photos.map((img, i) => (
+                <img key={i} src={img} alt={`元ページ${i + 1}`} className="w-full rounded-xl" />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </section>
