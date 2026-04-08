@@ -111,6 +111,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
   const [urlSource, setUrlSource] = useState<"ai" | "json-ld" | null>(null);
   const [extractedUrl, setExtractedUrl] = useState<string | null>(null);
   const [pages, setPages] = useState<PageEntry[]>([]);
+  const [pendingEntry, setPendingEntry] = useState<{ entry: PageEntry; warning: string; isFirstPage: boolean } | null>(null);
   const [blurError, setBlurError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -137,7 +138,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     return () => { document.body.style.overflow = ""; };
   }, []);
 
-  async function readAndCheck(file: File): Promise<PageEntry | null> {
+  async function readAndCheck(file: File): Promise<{ entry: PageEntry; warning: string | null }> {
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = async (e) => {
@@ -146,18 +147,17 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
         const img = new Image();
         img.onload = () => {
           const blurScore = detectBlur(img);
+          const entry: PageEntry = { id: crypto.randomUUID(), base64: resized, blurScore };
           if (blurScore < BLUR_THRESHOLD) {
-            setBlurError("写真がぼやけています。明るい場所でカメラを固定して撮り直してください。");
-            resolve(null);
+            resolve({ entry, warning: "写真がぼやけています。撮り直すと読み取り精度が上がりますが、このまま追加することもできます。" });
             return;
           }
           const brightness = detectBrightness(img);
           if (brightness < BRIGHTNESS_THRESHOLD) {
-            setBlurError("写真が暗すぎます。照明のある明るい場所で撮り直してください。");
-            resolve(null);
+            resolve({ entry, warning: "写真が暗すぎます。明るい場所で撮り直すと精度が上がりますが、このまま追加することもできます。" });
             return;
           }
-          resolve({ id: crypto.randomUUID(), base64: resized, blurScore });
+          resolve({ entry, warning: null });
         };
         img.src = resized;
       };
@@ -169,10 +169,14 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     const file = e.target.files?.[0];
     if (!file) return;
     setBlurError(null);
+    setPendingEntry(null);
     setError(null);
 
-    const entry = await readAndCheck(file);
-    if (!entry) return; // エラーは readAndCheck 内部でセット済み
+    const { entry, warning } = await readAndCheck(file);
+    if (warning) {
+      setPendingEntry({ entry, warning, isFirstPage: true });
+      return;
+    }
     setPages([entry]);
   }
 
@@ -180,19 +184,33 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     const file = e.target.files?.[0];
     if (!file) return;
     setBlurError(null);
+    setPendingEntry(null);
     e.target.value = "";
 
-    const entry = await readAndCheck(file);
-    if (!entry) return; // エラーは readAndCheck 内部でセット済み
+    const { entry, warning } = await readAndCheck(file);
 
-    setPages((prev) => {
-      // 重複ページ検出（同じ画像を2回追加しないよう base64 の先頭で比較）
-      if (prev.some((p) => p.base64.slice(0, 500) === entry.base64.slice(0, 500))) {
-        setBlurError("同じページが既に追加されています。");
-        return prev;
-      }
-      return [...prev, entry];
-    });
+    // 重複チェック
+    const isDup = pages.some((p) => p.base64.slice(0, 500) === entry.base64.slice(0, 500));
+    if (isDup) {
+      setBlurError("同じページが既に追加されています。");
+      return;
+    }
+
+    if (warning) {
+      setPendingEntry({ entry, warning, isFirstPage: false });
+      return;
+    }
+    setPages((prev) => [...prev, entry]);
+  }
+
+  function confirmPendingEntry() {
+    if (!pendingEntry) return;
+    if (pendingEntry.isFirstPage) {
+      setPages([pendingEntry.entry]);
+    } else {
+      setPages((prev) => [...prev, pendingEntry.entry]);
+    }
+    setPendingEntry(null);
   }
 
   function removePage(id: string) {
@@ -425,8 +443,39 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 ))}
               </div>
 
-              {/* Blur / photo error */}
-              {blurError && (
+              {/* 品質警告（ソフト）：撮り直しを促しつつ強制はしない */}
+              {pendingEntry && (
+                <div
+                  className="mb-4 px-4 py-3 rounded-xl"
+                  style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}
+                >
+                  <p className="font-semibold text-sm mb-1" style={{ color: "#92400E" }}>
+                    写真の品質を確認してください
+                  </p>
+                  <p className="text-xs leading-relaxed mb-3" style={{ color: "#B45309" }}>
+                    {pendingEntry.warning}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setPendingEntry(null)}
+                      className="flex-1 py-2 rounded-lg text-xs font-semibold"
+                      style={{ background: "#FEF3C7", color: "#92400E" }}
+                    >
+                      撮り直す
+                    </button>
+                    <button
+                      onClick={confirmPendingEntry}
+                      className="flex-1 py-2 rounded-lg text-xs font-semibold"
+                      style={{ background: "#92400E", color: "#fff" }}
+                    >
+                      このまま追加
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 重複エラー */}
+              {blurError && !pendingEntry && (
                 <div
                   className="mb-4 px-4 py-3 rounded-xl"
                   style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}
