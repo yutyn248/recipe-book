@@ -111,7 +111,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
   const [urlSource, setUrlSource] = useState<"ai" | "json-ld" | null>(null);
   const [extractedUrl, setExtractedUrl] = useState<string | null>(null);
   const [pages, setPages] = useState<PageEntry[]>([]);
-  const [pendingEntry, setPendingEntry] = useState<{ entry: PageEntry; warning: string; isFirstPage: boolean } | null>(null);
+  const [pendingBatch, setPendingBatch] = useState<{ entries: PageEntry[]; warning: string; appendToExisting: boolean } | null>(null);
   const [blurError, setBlurError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -165,53 +165,74 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     });
   }
 
-  async function handlePage1(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setBlurError(null);
-    setPendingEntry(null);
-    setError(null);
+  async function processFiles(files: File[], appendToExisting: boolean) {
+    const goodEntries: PageEntry[] = [];
+    const badEntries: PageEntry[] = [];
+    let firstWarning = "";
 
-    const { entry, warning } = await readAndCheck(file);
-    if (warning) {
-      setPendingEntry({ entry, warning, isFirstPage: true });
-      return;
+    for (const file of files) {
+      const { entry, warning } = await readAndCheck(file);
+
+      // 重複チェック（既存ページ＋今回追加済み分と比較）
+      const allSoFar = [...(appendToExisting ? pages : []), ...goodEntries];
+      if (allSoFar.some((p) => p.base64 === entry.base64)) continue;
+
+      // MAX_PAGES 超過チェック
+      if (allSoFar.length + goodEntries.length + badEntries.length >= MAX_PAGES) break;
+
+      if (warning) {
+        badEntries.push(entry);
+        if (!firstWarning) firstWarning = warning;
+      } else {
+        goodEntries.push(entry);
+      }
     }
-    setPages([entry]);
+
+    // 品質OKなものをすぐ追加
+    if (goodEntries.length > 0) {
+      if (appendToExisting) {
+        setPages((prev) => [...prev, ...goodEntries].slice(0, MAX_PAGES));
+      } else {
+        setPages(goodEntries.slice(0, MAX_PAGES));
+      }
+    }
+
+    // 品質に問題があるものはユーザーに確認（good分は追加済みなので常にappend）
+    if (badEntries.length > 0) {
+      const warning = badEntries.length === 1
+        ? firstWarning
+        : `${badEntries.length}枚の写真の品質に問題があります。撮り直すと読み取り精度が上がりますが、このまま追加することもできます。`;
+      setPendingBatch({ entries: badEntries, warning, appendToExisting: true });
+    }
+
+    // 重複のみで追加0件の場合
+    if (goodEntries.length === 0 && badEntries.length === 0 && files.length > 0) {
+      setBlurError("選択した写真は既に追加されています。");
+    }
+  }
+
+  async function handlePage1(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    setBlurError(null);
+    setPendingBatch(null);
+    setError(null);
+    await processFiles(files, false);
   }
 
   async function handleAddPage(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
     setBlurError(null);
-    setPendingEntry(null);
+    setPendingBatch(null);
     e.target.value = "";
-
-    const { entry, warning } = await readAndCheck(file);
-
-    // 重複チェック
-    // 完全一致で比較（先頭だけだと似た背景のスクショで誤検出する）
-    const isDup = pages.some((p) => p.base64 === entry.base64);
-    if (isDup) {
-      setBlurError("同じページが既に追加されています。");
-      return;
-    }
-
-    if (warning) {
-      setPendingEntry({ entry, warning, isFirstPage: false });
-      return;
-    }
-    setPages((prev) => [...prev, entry]);
+    await processFiles(files, true);
   }
 
-  function confirmPendingEntry() {
-    if (!pendingEntry) return;
-    if (pendingEntry.isFirstPage) {
-      setPages([pendingEntry.entry]);
-    } else {
-      setPages((prev) => [...prev, pendingEntry.entry]);
-    }
-    setPendingEntry(null);
+  function confirmPendingBatch() {
+    if (!pendingBatch) return;
+    setPages((prev) => [...prev, ...pendingBatch.entries].slice(0, MAX_PAGES));
+    setPendingBatch(null);
   }
 
   function removePage(id: string) {
@@ -445,7 +466,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
               </div>
 
               {/* 品質警告（ソフト）：撮り直しを促しつつ強制はしない */}
-              {pendingEntry && (
+              {pendingBatch && (
                 <div
                   className="mb-4 px-4 py-3 rounded-xl"
                   style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}
@@ -454,18 +475,18 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                     写真の品質を確認してください
                   </p>
                   <p className="text-xs leading-relaxed mb-3" style={{ color: "#B45309" }}>
-                    {pendingEntry.warning}
+                    {pendingBatch.warning}
                   </p>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => setPendingEntry(null)}
+                      onClick={() => setPendingBatch(null)}
                       className="flex-1 py-2 rounded-lg text-xs font-semibold"
                       style={{ background: "#FEF3C7", color: "#92400E" }}
                     >
-                      撮り直す
+                      キャンセル
                     </button>
                     <button
-                      onClick={confirmPendingEntry}
+                      onClick={confirmPendingBatch}
                       className="flex-1 py-2 rounded-lg text-xs font-semibold"
                       style={{ background: "#92400E", color: "#fff" }}
                     >
@@ -476,7 +497,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
               )}
 
               {/* 重複エラー */}
-              {blurError && !pendingEntry && (
+              {blurError && !pendingBatch && (
                 <div
                   className="mb-4 px-4 py-3 rounded-xl"
                   style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}
@@ -658,6 +679,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 ref={page1InputRef}
                 type="file"
                 accept="image/*"
+                multiple
                 className="hidden"
                 onChange={handlePage1}
               />
@@ -665,6 +687,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 ref={addPageInputRef}
                 type="file"
                 accept="image/*"
+                multiple
                 className="hidden"
                 onChange={handleAddPage}
               />
