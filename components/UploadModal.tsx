@@ -106,6 +106,8 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
   const isDuplicate = (t: string) =>
     existingTitles.some((e) => e.trim() === t.trim());
   const [step, setStep] = useState<ModalStep>("select");
+  const [inputMode, setInputMode] = useState<"photo" | "url">("photo");
+  const [urlInput, setUrlInput] = useState("");
   const [pages, setPages] = useState<PageEntry[]>([]);
   const [blurError, setBlurError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -264,6 +266,62 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     }
   }
 
+  async function handleExtractUrl() {
+    const trimmed = urlInput.trim();
+    if (!trimmed) return;
+    setStep("processing");
+    setError(null);
+    setErrorCode(null);
+    setProgress("レシピサイトを読み込み中...");
+
+    try {
+      const res = await fetch("/api/extract-recipe-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: trimmed }),
+      });
+
+      setProgress("レシピを整理中...");
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "エラーが発生しました");
+        setErrorCode(data.errorCode ?? null);
+        setStep("select");
+        return;
+      }
+
+      const { recipes } = data as { recipes: ExtractedRecipe[] };
+
+      if (recipes.length > 1) {
+        setMultiRecipes(recipes.map((r) => ({
+          ...r,
+          genre: (GENRES.includes(r.genre as Genre) ? r.genre : null) as Genre | null,
+        })));
+        setStep("multi-confirm");
+      } else {
+        const extracted = recipes[0] ?? {};
+        const newBlocks: Block[] = [];
+        if (Array.isArray(extracted.ingredients) && extracted.ingredients.length > 0) {
+          newBlocks.push({ id: crypto.randomUUID(), type: "ingredients", items: extracted.ingredients });
+        }
+        if (Array.isArray(extracted.steps)) {
+          for (const s of extracted.steps) {
+            newBlocks.push({ id: crypto.randomUUID(), type: "step", text: s });
+          }
+        }
+        setTitle(extracted.title ?? "不明な料理");
+        setGenre((GENRES.includes(extracted.genre as Genre) ? extracted.genre : null) as Genre | null);
+        setBlocks(newBlocks);
+        setStep("edit");
+      }
+    } catch {
+      setError("サーバーへの接続に失敗しました。ネットワークを確認してください。");
+      setErrorCode("NETWORK_ERROR");
+      setStep("select");
+    }
+  }
+
   function handleConfirm() {
     setStep("confirm");
   }
@@ -342,14 +400,34 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 </button>
               </div>
 
-              {/* Blur error */}
+              {/* 入力モード切替タブ */}
+              <div
+                className="flex rounded-xl mb-4 p-1"
+                style={{ background: "var(--bg)" }}
+              >
+                {(["photo", "url"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => { setInputMode(mode); setBlurError(null); setError(null); }}
+                    className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
+                    style={inputMode === mode
+                      ? { background: "var(--surface)", color: "var(--text-primary)", boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }
+                      : { color: "var(--text-secondary)" }
+                    }
+                  >
+                    {mode === "photo" ? "写真" : "URLから読み込む"}
+                  </button>
+                ))}
+              </div>
+
+              {/* Blur / photo error */}
               {blurError && (
                 <div
                   className="mb-4 px-4 py-3 rounded-xl"
                   style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}
                 >
                   <p className="font-semibold text-sm mb-0.5" style={{ color: "#DC2626" }}>
-                    写真がぼやけています
+                    写真を確認してください
                   </p>
                   <p className="text-xs" style={{ color: "#EF4444" }}>
                     {blurError}
@@ -357,7 +435,57 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 </div>
               )}
 
-              {pages.length === 0 ? (
+              {inputMode === "url" ? (
+                /* ── URL モード ── */
+                <div>
+                  <p className="text-xs mb-2 leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                    レシピサイトのURLを貼り付けると自動でレシピを読み込みます。
+                  </p>
+                  <div className="flex gap-2 mb-3">
+                    <input
+                      type="url"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleExtractUrl()}
+                      placeholder="https://..."
+                      className="flex-1 rounded-xl px-4 py-3 text-sm outline-none"
+                      style={{
+                        background: "var(--bg)",
+                        border: "1.5px solid #E0DBD5",
+                        color: "var(--text-primary)",
+                      }}
+                    />
+                  </div>
+                  {error && (
+                    <div
+                      className="mb-4 px-4 py-3 rounded-xl"
+                      style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}
+                    >
+                      <p className="font-semibold text-sm mb-1" style={{ color: "#DC2626" }}>
+                        読み込みに失敗しました
+                      </p>
+                      <p className="text-xs leading-relaxed" style={{ color: "#EF4444" }}>{error}</p>
+                      {errorCode && (
+                        <p className="text-xs mt-1.5 font-mono" style={{ color: "#FCA5A5" }}>
+                          エラーコード: {errorCode}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleExtractUrl}
+                    disabled={!urlInput.trim()}
+                    className="press-effect w-full py-3.5 font-semibold text-base rounded-xl"
+                    style={{
+                      background: urlInput.trim() ? "var(--accent)" : "var(--border)",
+                      color: urlInput.trim() ? "#fff" : "var(--text-secondary)",
+                    }}
+                  >
+                    読み込む →
+                  </button>
+                </div>
+              ) : pages.length === 0 ? (
+                /* ── 写真モード（未選択） ── */
                 <button
                   onClick={() => page1InputRef.current?.click()}
                   className="press-effect w-full rounded-2xl p-8 flex flex-col items-center gap-3"
