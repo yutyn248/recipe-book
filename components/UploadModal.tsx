@@ -8,7 +8,7 @@ import {
 import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { detectBlur, detectBrightness } from "@/lib/blur-detection";
-import { cropPhoto, resizeImage } from "@/lib/crop-photo";
+import { cropPhoto, resizeWithOrientation } from "@/lib/crop-photo";
 import { saveRecipe } from "@/lib/storage";
 import { Block } from "@/types/block";
 import { GENRES, Genre } from "@/types/recipe";
@@ -139,29 +139,25 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
   }, []);
 
   async function readAndCheck(file: File): Promise<{ entry: PageEntry; warning: string | null }> {
+    // EXIFの向きを考慮してリサイズ（横向き写真も正しく縦に補正される）
+    const resized = await resizeWithOrientation(file, 1200);
     return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const raw = e.target?.result as string;
-        const resized = await resizeImage(raw, 1200);
-        const img = new Image();
-        img.onload = () => {
-          const blurScore = detectBlur(img);
-          const entry: PageEntry = { id: crypto.randomUUID(), base64: resized, blurScore };
-          if (blurScore < BLUR_THRESHOLD) {
-            resolve({ entry, warning: "写真がぼやけています。撮り直すと読み取り精度が上がりますが、このまま追加することもできます。" });
-            return;
-          }
-          const brightness = detectBrightness(img);
-          if (brightness < BRIGHTNESS_THRESHOLD) {
-            resolve({ entry, warning: "写真が暗すぎます。明るい場所で撮り直すと精度が上がりますが、このまま追加することもできます。" });
-            return;
-          }
-          resolve({ entry, warning: null });
-        };
-        img.src = resized;
+      const img = new Image();
+      img.onload = () => {
+        const blurScore = detectBlur(img);
+        const entry: PageEntry = { id: crypto.randomUUID(), base64: resized, blurScore };
+        if (blurScore < BLUR_THRESHOLD) {
+          resolve({ entry, warning: "写真がぼやけています。撮り直すと読み取り精度が上がりますが、このまま追加することもできます。" });
+          return;
+        }
+        const brightness = detectBrightness(img);
+        if (brightness < BRIGHTNESS_THRESHOLD) {
+          resolve({ entry, warning: "写真が暗すぎます。明るい場所で撮り直すと精度が上がりますが、このまま追加することもできます。" });
+          return;
+        }
+        resolve({ entry, warning: null });
       };
-      reader.readAsDataURL(file);
+      img.src = resized;
     });
   }
 
