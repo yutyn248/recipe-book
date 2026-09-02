@@ -3,13 +3,23 @@ import { NextRequest, NextResponse } from "next/server";
 type ErrorCode =
   | "API_KEY_MISSING"
   | "NO_IMAGES"
-  | "GROQ_API_ERROR"
+  | "AI_API_ERROR"
   | "EMPTY_RESPONSE"
   | "JSON_NOT_FOUND"
   | "JSON_PARSE_ERROR"
   | "NO_RECIPE_FOUND"
   | "NETWORK_ERROR"
   | "UNEXPECTED_ERROR";
+
+/** Gemini APIで使用するモデル。Groqのllama-4-scoutが2026-06-17付で廃止されたためGeminiへ移行。 */
+const GEMINI_MODEL = "gemini-3.6-flash";
+
+/** "data:image/jpeg;base64,xxxx" 形式のURLをGemini用のmimeTypeとbase64データに分割する */
+function splitDataUrl(dataUrl: string): { mimeType: string; data: string } {
+  const match = dataUrl.match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (!match) return { mimeType: "image/jpeg", data: dataUrl };
+  return { mimeType: match[1], data: match[2] };
+}
 
 function apiError(message: string, code: ErrorCode, status: number, extra?: object) {
   console.error(`[${code}] ${message}`, extra ?? "");
@@ -40,81 +50,73 @@ function extractBalancedJson(text: string): string | null {
   return null;
 }
 
-type GroqResult =
+type GeminiResult =
   | { ok: true; text: string }
   | { ok: false; type: "network"; msg: string }
-  | { ok: false; type: "api"; status: number; groqMsg: string; groqType: string };
+  | { ok: false; type: "api"; status: number; apiMsg: string };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Groq Vision APIを1枚の画像で呼び出す（429時は自動リトライ） */
-async function callGroqVision(
+/** Gemini Vision APIを1枚の画像で呼び出す（429時は自動リトライ） */
+async function callGeminiVision(
   apiKey: string,
   imageUrl: string,
   promptText: string,
   retryCount = 0
-): Promise<GroqResult> {
+): Promise<GeminiResult> {
+  const { mimeType, data } = splitDataUrl(imageUrl);
   let res: Response;
   try {
-    res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: promptText },
-              { type: "image_url", image_url: { url: imageUrl } },
-            ],
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 8192,
-      }),
-    });
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: promptText },
+                { inline_data: { mime_type: mimeType, data } },
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 8192 },
+        }),
+      }
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, type: "network", msg };
   }
 
-  // 429 レート制限: Retry-After ヘッダーを見て待機してリトライ（最大2回）
+  // 429 レート制限: 待機してリトライ（最大2回）
   if (res.status === 429 && retryCount < 2) {
-    const retryAfter = parseInt(res.headers.get("retry-after") ?? "10", 10);
-    const waitMs = Math.min(retryAfter * 1000, 30000); // 最大30秒
+    const waitMs = 10000;
     console.warn(`[RATE_LIMIT] 429 received, waiting ${waitMs}ms before retry ${retryCount + 1}`);
     await sleep(waitMs);
-    return callGroqVision(apiKey, imageUrl, promptText, retryCount + 1);
+    return callGeminiVision(apiKey, imageUrl, promptText, retryCount + 1);
   }
 
   if (!res.ok) {
-    let errBody: { error?: { message?: string; type?: string } } = {};
+    let errBody: { error?: { message?: string } } = {};
     try { errBody = await res.json(); } catch { /* ignore */ }
-    return {
-      ok: false,
-      type: "api",
-      status: res.status,
-      groqMsg: errBody.error?.message ?? "詳細不明",
-      groqType: errBody.error?.type ?? "",
-    };
+    return { ok: false, type: "api", status: res.status, apiMsg: errBody.error?.message ?? "詳細不明" };
   }
 
-  let data: { choices?: { message?: { content?: string } }[] };
+  let data_: { candidates?: { content?: { parts?: { text?: string }[] } }[] };
   try {
-    data = await res.json();
+    data_ = await res.json();
   } catch {
-    return { ok: false, type: "api", status: 500, groqMsg: "レスポンス解析失敗", groqType: "" };
+    return { ok: false, type: "api", status: 500, apiMsg: "レスポンス解析失敗" };
   }
 
-  return { ok: true, text: data.choices?.[0]?.message?.content ?? "" };
+  const text = data_.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  return { ok: true, text };
 }
 
-/** Groqエラーをエラーレスポンスに変換 */
-function groqErrorResponse(result: Extract<GroqResult, { ok: false }>, pageLabel: string) {
+/** Gemini APIエラーをエラーレスポンスに変換 */
+function aiErrorResponse(result: Extract<GeminiResult, { ok: false }>, pageLabel: string) {
   if (result.type === "network") {
     return apiError(
       `${pageLabel}の処理中にネットワークエラーが発生しました。(${result.msg})`,
@@ -123,14 +125,17 @@ function groqErrorResponse(result: Extract<GroqResult, { ok: false }>, pageLabel
     );
   }
   const statusMessages: Record<number, string> = {
-    401: `APIキーが無効です (401)。GROQ_API_KEY を確認してください。`,
+    400: `リクエストが不正です (400): ${result.apiMsg}`,
+    401: `APIキーが無効です (401)。GEMINI_API_KEY を確認してください。`,
+    403: `APIキーの権限がありません (403)。GEMINI_API_KEY を確認してください。`,
+    404: `指定したAIモデルが見つかりません (404)。モデル名が廃止されていないか確認してください。`,
     429: `APIのレート制限に達しました (429)。しばらく待ってから再試行してください。`,
-    500: `Groq APIサーバーエラー (500): ${result.groqMsg}`,
-    503: `Groq APIが一時的に利用不可です (503)。しばらく待ってから再試行してください。`,
+    500: `AI APIサーバーエラー (500): ${result.apiMsg}`,
+    503: `AI APIが一時的に利用不可です (503)。しばらく待ってから再試行してください。`,
   };
   const message = statusMessages[result.status]
-    ?? `${pageLabel}の処理中にGroq APIエラーが発生しました (${result.status}): ${result.groqMsg}`;
-  return apiError(message, "GROQ_API_ERROR", 502, { groqType: result.groqType, groqStatus: result.status });
+    ?? `${pageLabel}の処理中にAI APIエラーが発生しました (${result.status}): ${result.apiMsg}`;
+  return apiError(message, "AI_API_ERROR", 502, { apiStatus: result.status });
 }
 
 // ── プロンプト定義 ────────────────────────────────────────────────
@@ -169,14 +174,14 @@ ${accumulatedJson}
 これは${totalPages}枚中${pageNum}枚目の画像です。このページを読んで、上記のJSONを補完・完成させた完全なJSONを返してください。
 
 【補完ルール】
-1. 前のページで手順が途中（文の途中）で切れていた場合、このページに続きが写っていれば1つの手順として統合する
-2. このページに同じ手順・材料が重複して写っている場合は1つにまとめる（前のページと完全に同じ内容は追加しない）
-3. このページに新しい手順・材料があれば追加する
-4. タイトル・材料・ジャンルはすでに正確に読み取れていれば変更しない
-5. 画像に書かれている文章をそのまま使う（要約・省略・推測しない）
-6. ポイント・メモ・コツは「【ポイント】〇〇」の形式でstepsの末尾に追加する
-7. 2段組・複数カラムのレイアウトの場合、左のカラムを上から下まで読み切ってから右のカラムへ進むこと
-8. Webページのスクリーンショットの場合、ナビゲーション・広告・コメント欄など本文以外は無視すること
+1. このページに前のページに存在しない新しいレシピがある場合は、recipesの配列に新しいオブジェクトとして必ず追加すること（これが最優先）
+2. 前のページで手順が途中（文の途中）で切れていた場合、このページに続きが写っていれば1つの手順として統合する
+3. このページに同じ手順・材料が重複して写っている場合は1つにまとめる（前のページと完全に同じ内容は追加しない）
+4. 既存レシピの続きの手順・材料があれば該当レシピに追加する
+5. タイトル・材料・ジャンルはすでに正確に読み取れていれば変更しない
+6. 画像に書かれている文章をそのまま使う（要約・省略・推測しない）
+7. ポイント・メモ・コツは「【ポイント】〇〇」の形式でstepsの末尾に追加する
+8. 2段組・複数カラムのレイアウトの場合、左のカラムを上から下まで読み切ってから右のカラムへ進むこと
 9. ½・¼・¾などの分数記号は「1/2」「1/4」「3/4」に変換すること
 10. 調理時間・人数などがある場合はstepsの先頭に「【調理情報】〇〇」として追加する
 
@@ -185,16 +190,16 @@ ${accumulatedJson}
 
 // ── メインハンドラ ────────────────────────────────────────────────
 
-// 複数ページを順番にGroq APIへ送るため処理時間が長くなりやすい。
+// 複数ページを順番にGemini APIへ送るため処理時間が長くなりやすい。
 // Vercel Hobbyプランで設定可能な上限（60秒）まで許可し、デフォルト10秒でのタイムアウトを防ぐ。
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   // 1. API キー確認
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return apiError(
-      "GROQ_API_KEY が設定されていません。環境変数を確認してください。",
+      "GEMINI_API_KEY が設定されていません。環境変数を確認してください。",
       "API_KEY_MISSING",
       500
     );
@@ -213,8 +218,8 @@ export async function POST(req: NextRequest) {
   }
 
   // 3. 1枚目を抽出
-  const firstResult = await callGroqVision(apiKey, pages[0], FIRST_PAGE_PROMPT);
-  if (!firstResult.ok) return groqErrorResponse(firstResult, "1枚目");
+  const firstResult = await callGeminiVision(apiKey, pages[0], FIRST_PAGE_PROMPT);
+  if (!firstResult.ok) return aiErrorResponse(firstResult, "1枚目");
 
   if (!firstResult.text.trim()) {
     return apiError(
@@ -235,9 +240,9 @@ export async function POST(req: NextRequest) {
       // ページ間に1秒待機してレート制限を回避
       await sleep(1000);
       const refinePrompt = buildRefinePrompt(accumulatedJson, i + 1, pages.length);
-      const result = await callGroqVision(apiKey, pages[i], refinePrompt);
+      const result = await callGeminiVision(apiKey, pages[i], refinePrompt);
 
-      if (!result.ok) return groqErrorResponse(result, `${i + 1}枚目`);
+      if (!result.ok) return aiErrorResponse(result, `${i + 1}枚目`);
       if (!result.text.trim()) continue; // 空なら前の結果を維持
 
       const refined = extractBalancedJson(result.text);

@@ -4,12 +4,15 @@ type ErrorCode =
   | "API_KEY_MISSING"
   | "INVALID_URL"
   | "FETCH_FAILED"
-  | "GROQ_API_ERROR"
+  | "AI_API_ERROR"
   | "NETWORK_ERROR"
   | "JSON_NOT_FOUND"
   | "JSON_PARSE_ERROR"
   | "NO_RECIPE_FOUND"
   | "UNEXPECTED_ERROR";
+
+/** Gemini APIで使用するモデル。Groqのllama-4-scoutが2026-06-17付で廃止されたためGeminiへ移行。 */
+const GEMINI_MODEL = "gemini-3.6-flash";
 
 function apiError(message: string, code: ErrorCode, status: number, extra?: object) {
   console.error(`[${code}] ${message}`, extra ?? "");
@@ -168,7 +171,7 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-// ── Groq テキスト呼び出し ─────────────────────────────────────────
+// ── Gemini テキスト呼び出し ─────────────────────────────────────────
 
 const URL_EXTRACTION_PROMPT = `以下はレシピサイトから取得したWebページのテキストです。このテキストからレシピを抽出してください。
 
@@ -189,57 +192,56 @@ genreは以下から最も適切なものを1つ：和食, 洋食, 中華, イ�
 --- Webページのテキスト ---
 `;
 
-async function extractWithGroq(apiKey: string, pageText: string) {
+async function extractWithGemini(apiKey: string, pageText: string) {
   const truncated = pageText.slice(0, 12000);
   let res: Response;
   try {
-    res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        messages: [{ role: "user", content: URL_EXTRACTION_PROMPT + truncated }],
-        temperature: 0.1,
-        max_tokens: 4096,
-      }),
-    });
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: URL_EXTRACTION_PROMPT + truncated }] }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
+        }),
+      }
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false as const, type: "network" as const, msg };
   }
 
   if (!res.ok) {
-    let errBody: { error?: { message?: string; type?: string } } = {};
+    let errBody: { error?: { message?: string } } = {};
     try { errBody = await res.json(); } catch { /* ignore */ }
     return {
       ok: false as const,
       type: "api" as const,
       status: res.status,
-      groqMsg: errBody.error?.message ?? "詳細不明",
+      apiMsg: errBody.error?.message ?? "詳細不明",
     };
   }
 
-  let data: { choices?: { message?: { content?: string } }[] };
+  let data: { candidates?: { content?: { parts?: { text?: string }[] } }[] };
   try { data = await res.json(); } catch {
-    return { ok: false as const, type: "api" as const, status: 500, groqMsg: "レスポンス解析失敗" };
+    return { ok: false as const, type: "api" as const, status: 500, apiMsg: "レスポンス解析失敗" };
   }
 
-  return { ok: true as const, text: data.choices?.[0]?.message?.content ?? "" };
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  return { ok: true as const, text };
 }
 
 // ── メインハンドラ ────────────────────────────────────────────────
 
-// ページ取得＋Groq API呼び出しで時間がかかる場合があるため、
+// ページ取得＋Gemini API呼び出しで時間がかかる場合があるため、
 // Vercel Hobbyプランで設定可能な上限（60秒）まで許可し、デフォルト10秒でのタイムアウトを防ぐ。
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return apiError("GROQ_API_KEY が設定されていません。", "API_KEY_MISSING", 500);
+    return apiError("GEMINI_API_KEY が設定されていません。", "API_KEY_MISSING", 500);
   }
 
   let url: string;
@@ -295,20 +297,22 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // JSON-LD がなければ Groq AI でテキスト解析
+  // JSON-LD がなければ Gemini AI でテキスト解析
   const pageText = htmlToText(html);
-  const result = await extractWithGroq(apiKey, pageText);
+  const result = await extractWithGemini(apiKey, pageText);
 
   if (!result.ok) {
     if (result.type === "network") {
-      return apiError(`Groq APIへの接続に失敗しました。(${result.msg})`, "NETWORK_ERROR", 503);
+      return apiError(`Gemini APIへの接続に失敗しました。(${result.msg})`, "NETWORK_ERROR", 503);
     }
     const statusMessages: Record<number, string> = {
       401: "APIキーが無効です (401)。",
+      403: "APIキーの権限がありません (403)。",
+      404: "指定したAIモデルが見つかりません (404)。",
       429: "APIのレート制限に達しました (429)。しばらく待ってから再試行してください。",
     };
-    const message = statusMessages[result.status] ?? `Groq APIエラー (${result.status}): ${result.groqMsg}`;
-    return apiError(message, "GROQ_API_ERROR", 502);
+    const message = statusMessages[result.status] ?? `Gemini APIエラー (${result.status}): ${result.apiMsg}`;
+    return apiError(message, "AI_API_ERROR", 502);
   }
 
   const extracted = extractBalancedJson(result.text);

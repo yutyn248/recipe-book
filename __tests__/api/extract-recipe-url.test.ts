@@ -6,7 +6,7 @@ const mockFetch = vi.fn();
 
 beforeEach(() => {
   vi.stubGlobal("fetch", mockFetch);
-  vi.stubEnv("GROQ_API_KEY", "test-api-key");
+  vi.stubEnv("GEMINI_API_KEY", "test-api-key");
 });
 
 afterEach(() => {
@@ -31,21 +31,21 @@ function pageOkResponse(html: string) {
   };
 }
 
-function groqOkResponse(content: string) {
+function geminiOkResponse(content: string) {
   return {
     ok: true,
     status: 200,
     headers: { get: () => null },
-    json: () => Promise.resolve({ choices: [{ message: { content } }] }),
+    json: () => Promise.resolve({ candidates: [{ content: { parts: [{ text: content }] } }] }),
   };
 }
 
-function groqErrorResponse(status: number, message = "Error") {
+function geminiErrorResponse(status: number, message = "Error") {
   return {
     ok: false,
     status,
     headers: { get: () => null },
-    json: () => Promise.resolve({ error: { message, type: "error" } }),
+    json: () => Promise.resolve({ error: { message } }),
   };
 }
 
@@ -73,8 +73,8 @@ const validJsonLd = {
 
 // ── バリデーション ────────────────────────────────────────────────
 describe("バリデーション", () => {
-  it("GROQ_API_KEY が未設定の場合 500 を返す", async () => {
-    vi.stubEnv("GROQ_API_KEY", "");
+  it("GEMINI_API_KEY が未設定の場合 500 を返す", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
     const res = await POST(makeRequest({ url: "https://example.com/recipe" }));
     expect(res.status).toBe(500);
     const body = await res.json();
@@ -107,7 +107,7 @@ describe("JSON-LD抽出", () => {
     expect(body.recipes[0].title).toBe("唐揚げ");
     expect(body.recipes[0].ingredients).toContain("鶏肉 300g");
     expect(body.recipes[0].steps).toContain("鶏肉を切る");
-    // Groq APIは呼ばれない
+    // Gemini APIは呼ばれない
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -177,8 +177,8 @@ describe("JSON-LD抽出", () => {
   });
 });
 
-// ── Groq AI フォールバック ────────────────────────────────────────────
-describe("GroqAIフォールバック", () => {
+// ── Gemini AI フォールバック ────────────────────────────────────────────
+describe("GeminiAIフォールバック", () => {
   const plainHtml = "<html><body><p>唐揚げレシピ</p></body></html>";
   const validAiRecipe = {
     recipes: [{
@@ -189,9 +189,9 @@ describe("GroqAIフォールバック", () => {
     }],
   };
 
-  it("JSON-LDがなければGroq AIにフォールバックして source: ai を返す", async () => {
+  it("JSON-LDがなければGemini AIにフォールバックして source: ai を返す", async () => {
     mockFetch.mockResolvedValueOnce(pageOkResponse(plainHtml));
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify(validAiRecipe)));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify(validAiRecipe)));
     const res = await POST(makeRequest({ url: "https://example.com/recipe" }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -203,7 +203,7 @@ describe("GroqAIフォールバック", () => {
   it("AIが余分なテキストを含んでいてもJSONを抽出できる", async () => {
     const messyResponse = `はい、以下のレシピです：\n${JSON.stringify(validAiRecipe)}\n以上です。`;
     mockFetch.mockResolvedValueOnce(pageOkResponse(plainHtml));
-    mockFetch.mockResolvedValueOnce(groqOkResponse(messyResponse));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(messyResponse));
     const res = await POST(makeRequest({ url: "https://example.com/recipe" }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -212,7 +212,7 @@ describe("GroqAIフォールバック", () => {
 
   it("AIがJSONを返さない場合 JSON_NOT_FOUND を返す", async () => {
     mockFetch.mockResolvedValueOnce(pageOkResponse(plainHtml));
-    mockFetch.mockResolvedValueOnce(groqOkResponse("このページにはレシピが見つかりませんでした。"));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse("このページにはレシピが見つかりませんでした。"));
     const res = await POST(makeRequest({ url: "https://example.com/recipe" }));
     const body = await res.json();
     expect(body.errorCode).toBe("JSON_NOT_FOUND");
@@ -220,19 +220,19 @@ describe("GroqAIフォールバック", () => {
 
   it("AIが空のrecipesを返した場合 NO_RECIPE_FOUND を返す", async () => {
     mockFetch.mockResolvedValueOnce(pageOkResponse(plainHtml));
-    mockFetch.mockResolvedValueOnce(groqOkResponse('{"recipes":[]}'));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse('{"recipes":[]}'));
     const res = await POST(makeRequest({ url: "https://example.com/recipe" }));
     const body = await res.json();
     expect(body.errorCode).toBe("NO_RECIPE_FOUND");
   });
 
-  it("AIが401を返した場合 GROQ_API_ERROR を返す", async () => {
+  it("AIが401を返した場合 AI_API_ERROR を返す", async () => {
     mockFetch.mockResolvedValueOnce(pageOkResponse(plainHtml));
-    mockFetch.mockResolvedValueOnce(groqErrorResponse(401, "Invalid API key"));
+    mockFetch.mockResolvedValueOnce(geminiErrorResponse(401, "Invalid API key"));
     const res = await POST(makeRequest({ url: "https://example.com/recipe" }));
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.errorCode).toBe("GROQ_API_ERROR");
+    expect(body.errorCode).toBe("AI_API_ERROR");
   });
 
   it("AIへのfetchが失敗した場合 NETWORK_ERROR を返す", async () => {

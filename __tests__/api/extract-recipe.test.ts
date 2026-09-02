@@ -6,7 +6,7 @@ const mockFetch = vi.fn();
 
 beforeEach(() => {
   vi.stubGlobal("fetch", mockFetch);
-  vi.stubEnv("GROQ_API_KEY", "test-api-key");
+  vi.stubEnv("GEMINI_API_KEY", "test-api-key");
 });
 
 afterEach(() => {
@@ -23,21 +23,21 @@ function makeRequest(body: object) {
   });
 }
 
-function groqOkResponse(content: string) {
+function geminiOkResponse(content: string) {
   return {
     ok: true,
     status: 200,
     headers: { get: () => null },
-    json: () => Promise.resolve({ choices: [{ message: { content } }] }),
+    json: () => Promise.resolve({ candidates: [{ content: { parts: [{ text: content }] } }] }),
   };
 }
 
-function groq429Response() {
+function gemini429Response() {
   return {
     ok: false,
     status: 429,
-    headers: { get: (h: string) => h === "retry-after" ? "0" : null },
-    json: () => Promise.resolve({ error: { message: "Rate limit exceeded", type: "rate_limit_error" } }),
+    headers: { get: () => null },
+    json: () => Promise.resolve({ error: { message: "Rate limit exceeded" } }),
   };
 }
 
@@ -47,8 +47,8 @@ const validRecipe = (title: string) => ({
 
 // ── バリデーション ────────────────────────────────────────────────
 describe("バリデーション", () => {
-  it("GROQ_API_KEY が未設定の場合 500 を返す", async () => {
-    vi.stubEnv("GROQ_API_KEY", "");
+  it("GEMINI_API_KEY が未設定の場合 500 を返す", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
     const res = await POST(makeRequest({ pages: ["data:image/jpeg;base64,abc"] }));
     expect(res.status).toBe(500);
     const body = await res.json();
@@ -66,7 +66,7 @@ describe("バリデーション", () => {
 // ── 1枚処理（基本） ────────────────────────────────────────────
 describe("1枚処理", () => {
   it("正常な1レシピを返す", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
     const res = await POST(makeRequest({ pages: ["img1"] }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -75,7 +75,7 @@ describe("1枚処理", () => {
   });
 
   it("1ページに複数レシピがある場合すべて返す", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({
       recipes: [validRecipe("唐揚げ"), validRecipe("味噌汁")],
     })));
     const res = await POST(makeRequest({ pages: ["img1"] }));
@@ -85,7 +85,7 @@ describe("1枚処理", () => {
 
   it("AIが余分なテキストを含んでいてもJSONを抽出できる", async () => {
     const messyResponse = `こちらがレシピです：\n${JSON.stringify({ recipes: [validRecipe("味噌汁")] })}\n以上です。`;
-    mockFetch.mockResolvedValueOnce(groqOkResponse(messyResponse));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(messyResponse));
     const res = await POST(makeRequest({ pages: ["img1"] }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -94,7 +94,7 @@ describe("1枚処理", () => {
 
   it("JSONの後に余計な波括弧があっても正しく抽出できる（最初の完全なJSONのみ取得）", async () => {
     const tricky = `${JSON.stringify({ recipes: [validRecipe("唐揚げ")] })} 注意: {NG}`;
-    mockFetch.mockResolvedValueOnce(groqOkResponse(tricky));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(tricky));
     const res = await POST(makeRequest({ pages: ["img1"] }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -103,7 +103,7 @@ describe("1枚処理", () => {
 
   it("制御文字が含まれていてもパースできる", async () => {
     const withControl = JSON.stringify({ recipes: [validRecipe("唐揚げ")] }).replace("唐揚げ", "唐揚げ\x01\x08");
-    mockFetch.mockResolvedValueOnce(groqOkResponse(withControl));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(withControl));
     const res = await POST(makeRequest({ pages: ["img1"] }));
     expect(res.status).toBe(200);
   });
@@ -112,8 +112,8 @@ describe("1枚処理", () => {
 // ── 複数ページ処理 ────────────────────────────────────────────
 describe("複数ページ処理", () => {
   it("2枚：1枚目のレシピを抽出し2枚目で精錬する（2回APIを呼ぶ）", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
     const res = await POST(makeRequest({ pages: ["img1", "img2"] }));
     expect(res.status).toBe(200);
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -121,10 +121,10 @@ describe("複数ページ処理", () => {
 
   it("2枚目に新しいレシピがあれば追加される（今回の修正の核心）", async () => {
     // img1: レシピAとB、img2の精錬後: A、B、C、Dすべて返る
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({
       recipes: [validRecipe("唐揚げ"), validRecipe("味噌汁")],
     })));
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({
       recipes: [validRecipe("唐揚げ"), validRecipe("味噌汁"), validRecipe("カレー"), validRecipe("サラダ")],
     })));
     const res = await POST(makeRequest({ pages: ["img1", "img2"] }));
@@ -137,10 +137,10 @@ describe("複数ページ処理", () => {
   }, 10000);
 
   it("手順が2枚目で統合されても最終的なレシピが返る", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({
       recipes: [{ title: "唐揚げ", genre: "和食", ingredients: ["鶏肉"], steps: ["鶏肉を切る（途中"] }],
     })));
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({
       recipes: [{ title: "唐揚げ", genre: "和食", ingredients: ["鶏肉"], steps: ["鶏肉を切る（完成）", "揚げる"] }],
     })));
     const res = await POST(makeRequest({ pages: ["img1", "img2"] }));
@@ -149,9 +149,9 @@ describe("複数ページ処理", () => {
   }, 10000);
 
   it("3枚：順番にAPIを呼んで最終結果を返す", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("A")] })));
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("A"), validRecipe("B")] })));
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("A"), validRecipe("B"), validRecipe("C")] })));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("A")] })));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("A"), validRecipe("B")] })));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("A"), validRecipe("B"), validRecipe("C")] })));
     const res = await POST(makeRequest({ pages: ["p1", "p2", "p3"] }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -160,8 +160,8 @@ describe("複数ページ処理", () => {
   }, 15000);
 
   it("1枚目が無関係な写真でも2枚目でレシピを取得できる", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse('{"recipes": []}'));
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse('{"recipes": []}'));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
     const res = await POST(makeRequest({ pages: ["unrelated", "recipe"] }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -169,8 +169,8 @@ describe("複数ページ処理", () => {
   }, 10000);
 
   it("精錬ページでJSONが取れなくても前の結果を維持する", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
-    mockFetch.mockResolvedValueOnce(groqOkResponse("解析できませんでした"));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse("解析できませんでした"));
     const res = await POST(makeRequest({ pages: ["img1", "img2"] }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -180,29 +180,43 @@ describe("複数ページ処理", () => {
 
 // ── 429 リトライ ────────────────────────────────────────────
 describe("429 レート制限リトライ", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("1回目429 → 2回目成功でリトライが機能する", async () => {
-    mockFetch.mockResolvedValueOnce(groq429Response());
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
-    const res = await POST(makeRequest({ pages: ["img1"] }));
+    mockFetch.mockResolvedValueOnce(gemini429Response());
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    const resPromise = POST(makeRequest({ pages: ["img1"] }));
+    await vi.advanceTimersByTimeAsync(10000);
+    const res = await resPromise;
     expect(res.status).toBe(200);
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it("2回目も429 → 3回目成功でリトライが機能する", async () => {
-    mockFetch.mockResolvedValueOnce(groq429Response());
-    mockFetch.mockResolvedValueOnce(groq429Response());
-    mockFetch.mockResolvedValueOnce(groqOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
-    const res = await POST(makeRequest({ pages: ["img1"] }));
+    mockFetch.mockResolvedValueOnce(gemini429Response());
+    mockFetch.mockResolvedValueOnce(gemini429Response());
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    const resPromise = POST(makeRequest({ pages: ["img1"] }));
+    await vi.advanceTimersByTimeAsync(20000);
+    const res = await resPromise;
     expect(res.status).toBe(200);
     expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
   it("3回連続429はエラーを返す（リトライ上限）", async () => {
-    mockFetch.mockResolvedValue(groq429Response());
-    const res = await POST(makeRequest({ pages: ["img1"] }));
+    mockFetch.mockResolvedValue(gemini429Response());
+    const resPromise = POST(makeRequest({ pages: ["img1"] }));
+    await vi.advanceTimersByTimeAsync(20000);
+    const res = await resPromise;
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.errorCode).toBe("GROQ_API_ERROR");
+    expect(body.errorCode).toBe("AI_API_ERROR");
     expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 });
@@ -218,7 +232,7 @@ describe("エラーハンドリング", () => {
     const res = await POST(makeRequest({ pages: ["img1"] }));
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.errorCode).toBe("GROQ_API_ERROR");
+    expect(body.errorCode).toBe("AI_API_ERROR");
     expect(body.error).toContain("401");
   });
 
@@ -234,7 +248,7 @@ describe("エラーハンドリング", () => {
     mockFetch.mockResolvedValueOnce({
       ok: true, status: 200,
       headers: { get: () => null },
-      json: () => Promise.resolve({ choices: [{ message: { content: "" } }] }),
+      json: () => Promise.resolve({ candidates: [{ content: { parts: [{ text: "" }] } }] }),
     });
     const res = await POST(makeRequest({ pages: ["img1"] }));
     const body = await res.json();
@@ -242,21 +256,21 @@ describe("エラーハンドリング", () => {
   });
 
   it("JSONが含まれない場合 JSON_NOT_FOUND を返す", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse("レシピが見つかりませんでした。"));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse("レシピが見つかりませんでした。"));
     const res = await POST(makeRequest({ pages: ["img1"] }));
     const body = await res.json();
     expect(body.errorCode).toBe("JSON_NOT_FOUND");
   });
 
   it("不正なJSONの場合 JSON_PARSE_ERROR を返す", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse("{ invalid json }"));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse("{ invalid json }"));
     const res = await POST(makeRequest({ pages: ["img1"] }));
     const body = await res.json();
     expect(body.errorCode).toBe("JSON_PARSE_ERROR");
   });
 
   it("タイトルがないレシピの場合 NO_RECIPE_FOUND を返す", async () => {
-    mockFetch.mockResolvedValueOnce(groqOkResponse('{"recipes":[{"ingredients":[],"steps":[]}]}'));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse('{"recipes":[{"ingredients":[],"steps":[]}]}'));
     const res = await POST(makeRequest({ pages: ["img1"] }));
     const body = await res.json();
     expect(body.errorCode).toBe("NO_RECIPE_FOUND");
