@@ -116,6 +116,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   // edit step state (single recipe)
   const [title, setTitle] = useState("");
@@ -371,17 +372,27 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
       setError(`「${title.trim()}」は既に登録されています。別の名前にしてください。`);
       return;
     }
-    await saveRecipe({
-      id: crypto.randomUUID(),
-      title,
-      genre,
-      blocks,
-      // URL経由の場合はURLをevidenceとして保存、写真の場合はbase64を保存
-      originalImages: extractedUrl ? [extractedUrl] : pages.map((p) => p.base64),
-      createdAt: new Date().toISOString(),
-    });
-    setStep("done");
-    setTimeout(() => onSaved(), 800);
+    setError(null);
+    setErrorCode(null);
+    setIsSaving(true);
+    try {
+      await saveRecipe({
+        id: crypto.randomUUID(),
+        title,
+        genre,
+        blocks,
+        // URL経由の場合はURLをevidenceとして保存、写真の場合はbase64を保存
+        originalImages: extractedUrl ? [extractedUrl] : pages.map((p) => p.base64),
+        createdAt: new Date().toISOString(),
+      });
+      setStep("done");
+      setTimeout(() => onSaved(), 800);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "保存中にエラーが発生しました。");
+      setErrorCode("SAVE_ERROR");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   // ─── Computed preview photo for confirm screen ───────────────
@@ -912,6 +923,24 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
               </div>
 
               <div className="px-5 pt-5 space-y-2.5">
+                {error && (
+                  <div
+                    className="mb-1.5 px-4 py-3 rounded-xl"
+                    style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}
+                  >
+                    <p className="font-semibold text-sm mb-1" style={{ color: "#DC2626" }}>
+                      保存に失敗しました
+                    </p>
+                    <p className="text-xs leading-relaxed" style={{ color: "#EF4444" }}>
+                      {error}
+                    </p>
+                    {errorCode && (
+                      <p className="text-xs mt-1.5 font-mono" style={{ color: "#FCA5A5" }}>
+                        エラーコード: {errorCode}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <button
                   onClick={async () => {
                     const dupes = multiRecipes.map((r) => r.title).filter((t) => isDuplicate(t));
@@ -919,33 +948,45 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                       setError(`「${dupes.join("」「")}」は既に登録されています。`);
                       return;
                     }
-                    for (const r of multiRecipes) {
-                      const blocks: Block[] = [];
-                      if (r.ingredients.length > 0) {
-                        blocks.push({ id: crypto.randomUUID(), type: "ingredients", items: r.ingredients });
+                    setError(null);
+                    setErrorCode(null);
+                    setIsSaving(true);
+                    try {
+                      for (const r of multiRecipes) {
+                        const blocks: Block[] = [];
+                        if (r.ingredients.length > 0) {
+                          blocks.push({ id: crypto.randomUUID(), type: "ingredients", items: r.ingredients });
+                        }
+                        for (const s of r.steps) {
+                          blocks.push({ id: crypto.randomUUID(), type: "step", text: s });
+                        }
+                        await saveRecipe({
+                          id: crypto.randomUUID(),
+                          title: r.title || "不明な料理",
+                          genre: r.genre,
+                          blocks,
+                          originalImages: extractedUrl ? [extractedUrl] : pages.map((p) => p.base64),
+                          createdAt: new Date().toISOString(),
+                        });
                       }
-                      for (const s of r.steps) {
-                        blocks.push({ id: crypto.randomUUID(), type: "step", text: s });
-                      }
-                      await saveRecipe({
-                        id: crypto.randomUUID(),
-                        title: r.title || "不明な料理",
-                        genre: r.genre,
-                        blocks,
-                        originalImages: extractedUrl ? [extractedUrl] : pages.map((p) => p.base64),
-                        createdAt: new Date().toISOString(),
-                      });
+                      setStep("done");
+                      setTimeout(() => onSaved(), 800);
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "保存中にエラーが発生しました。");
+                      setErrorCode("SAVE_ERROR");
+                    } finally {
+                      setIsSaving(false);
                     }
-                    setStep("done");
-                    setTimeout(() => onSaved(), 800);
                   }}
+                  disabled={isSaving}
                   className="press-effect w-full py-3.5 font-semibold text-base rounded-2xl"
-                  style={{ background: "var(--accent)", color: "#fff" }}
+                  style={{ background: "var(--accent)", color: "#fff", opacity: isSaving ? 0.6 : 1 }}
                 >
-                  {multiRecipes.length}つまとめて保存
+                  {isSaving ? "保存中..." : `${multiRecipes.length}つまとめて保存`}
                 </button>
                 <button
                   onClick={() => { setPages([]); setMultiRecipes([]); setStep("select"); }}
+                  disabled={isSaving}
                   className="press-effect w-full py-3 font-semibold text-sm rounded-2xl"
                   style={{ background: "var(--border)", color: "var(--text-secondary)" }}
                 >
@@ -1030,12 +1071,31 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
 
               {/* Action buttons */}
               <div className="px-5 pt-6 space-y-2.5">
+                {error && (
+                  <div
+                    className="mb-1.5 px-4 py-3 rounded-xl"
+                    style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}
+                  >
+                    <p className="font-semibold text-sm mb-1" style={{ color: "#DC2626" }}>
+                      保存に失敗しました
+                    </p>
+                    <p className="text-xs leading-relaxed" style={{ color: "#EF4444" }}>
+                      {error}
+                    </p>
+                    {errorCode && (
+                      <p className="text-xs mt-1.5 font-mono" style={{ color: "#FCA5A5" }}>
+                        エラーコード: {errorCode}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <button
                   onClick={handleSave}
+                  disabled={isSaving}
                   className="press-effect w-full py-3.5 font-semibold text-base rounded-2xl"
-                  style={{ background: "var(--accent)", color: "#fff" }}
+                  style={{ background: "var(--accent)", color: "#fff", opacity: isSaving ? 0.6 : 1 }}
                 >
-                  保存する
+                  {isSaving ? "保存中..." : "保存する"}
                 </button>
                 <div className="grid grid-cols-2 gap-2">
                   <button
