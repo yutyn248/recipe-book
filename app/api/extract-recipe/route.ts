@@ -185,6 +185,10 @@ ${accumulatedJson}
 
 // ── メインハンドラ ────────────────────────────────────────────────
 
+// 複数ページを順番にGroq APIへ送るため処理時間が長くなりやすい。
+// Vercel Hobbyプランで設定可能な上限（60秒）まで許可し、デフォルト10秒でのタイムアウトを防ぐ。
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
   // 1. API キー確認
   const apiKey = process.env.GROQ_API_KEY;

@@ -232,6 +232,10 @@ async function extractWithGroq(apiKey: string, pageText: string) {
 
 // ── メインハンドラ ────────────────────────────────────────────────
 
+// ページ取得＋Groq API呼び出しで時間がかかる場合があるため、
+// Vercel Hobbyプランで設定可能な上限（60秒）まで許可し、デフォルト10秒でのタイムアウトを防ぐ。
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
