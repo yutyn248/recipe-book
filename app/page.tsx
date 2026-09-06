@@ -19,6 +19,7 @@ export default function Home() {
   const [shoppingCount, setShoppingCount] = useState(0);
   const [allMeta, setAllMeta] = useState<Record<string, RecipeMeta>>({});
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   useEffect(() => {
     setShoppingCount(getShoppingItems().filter((i) => !i.checked).length);
@@ -40,12 +41,19 @@ export default function Home() {
   async function loadRecipes() {
     // キャッシュがあれば即時表示
     const cached = localStorage.getItem("recipes_cache");
-    if (cached) setRecipes(JSON.parse(cached));
+    if (cached) {
+      try { setRecipes(JSON.parse(cached)); } catch { /* 壊れたキャッシュは無視 */ }
+    }
 
     // Supabaseから最新を取得して更新
-    const fresh = await getRecipes();
-    setRecipes(fresh);
-    localStorage.setItem("recipes_cache", JSON.stringify(fresh));
+    try {
+      const fresh = await getRecipes();
+      setRecipes(fresh);
+      localStorage.setItem("recipes_cache", JSON.stringify(fresh));
+      setSyncError(null);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : "レシピの読み込みに失敗しました。");
+    }
   }
 
   useEffect(() => {
@@ -130,6 +138,15 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* データ取得エラー */}
+      {syncError && (
+        <div className="mx-4 mb-3 px-4 py-3 rounded-xl" style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}>
+          <p className="font-semibold text-sm mb-1" style={{ color: "#DC2626" }}>最新データを取得できませんでした</p>
+          <p className="text-xs leading-relaxed" style={{ color: "#EF4444" }}>{syncError}</p>
+          <p className="text-xs mt-1" style={{ color: "#EF4444" }}>表示中のレシピは前回取得時点のものです。</p>
+        </div>
+      )}
 
       {/* Search bar */}
       {recipes.length > 0 && (

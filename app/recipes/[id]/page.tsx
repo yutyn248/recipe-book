@@ -31,21 +31,53 @@ export default function RecipePage() {
   const [editRating, setEditRating] = useState<number | undefined>(undefined);
   const [showCookedModal, setShowCookedModal] = useState(false);
   const [cookedRating, setCookedRating] = useState<number | undefined>(undefined);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isOffline, setIsOffline] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  function applyRecipe(r: Recipe) {
+    setRecipe(r);
+    setEditTitle(r.title);
+    setEditGenre(r.genre);
+    const heroBlocks = r.blocks.filter((b) => b.type === "hero") as { id: string; type: "hero"; base64: string }[];
+    const otherBlocks = r.blocks.filter((b) => b.type !== "hero");
+    setEditHeroPhotos(heroBlocks.map((b) => b.base64));
+    setEditBlocks(otherBlocks);
+    const m = getRecipeMeta(r.id);
+    setMeta(m);
+    setEditRating(m.rating);
+  }
+
+  /** キャッシュ（一覧画面が保存したもの）から該当レシピを探す。オフライン時のフォールバック用 */
+  function findInCache(id: string): Recipe | null {
+    try {
+      const cached = localStorage.getItem("recipes_cache");
+      if (!cached) return null;
+      const list: Recipe[] = JSON.parse(cached);
+      return list.find((r) => r.id === id) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   useEffect(() => {
     (async () => {
-      const r = await getRecipeById(params.id as string);
-      if (!r) { router.push("/"); return; }
-      setRecipe(r);
-      setEditTitle(r.title);
-      setEditGenre(r.genre);
-      const heroBlocks = r.blocks.filter((b) => b.type === "hero") as { id: string; type: "hero"; base64: string }[];
-      const otherBlocks = r.blocks.filter((b) => b.type !== "hero");
-      setEditHeroPhotos(heroBlocks.map((b) => b.base64));
-      setEditBlocks(otherBlocks);
-      const m = getRecipeMeta(r.id);
-      setMeta(m);
-      setEditRating(m.rating);
+      try {
+        const r = await getRecipeById(params.id as string);
+        if (!r) { router.push("/"); return; }
+        applyRecipe(r);
+      } catch (e) {
+        // Supabaseに繋がらない場合は、一覧画面のキャッシュから表示できないか試す
+        const cached = findInCache(params.id as string);
+        if (cached) {
+          applyRecipe(cached);
+          setIsOffline(true);
+        } else {
+          setLoadError(e instanceof Error ? e.message : "読み込みに失敗しました。");
+        }
+      }
     })();
   }, [params.id, router]);
 
@@ -162,28 +194,46 @@ export default function RecipePage() {
 
     setPendingBlocks(allBlocks);
     setChangeSummary(summary.length > 0 ? summary : ["変更なし"]);
+    setSaveError(null);
     setShowSaveConfirm(true);
   }
 
   async function executeSave() {
     if (!recipe) return;
-    const updated = { ...recipe, title: editTitle, genre: editGenre, blocks: pendingBlocks };
-    await updateRecipe(updated);
-    setRecipe(updated);
-    // save rating change
-    if (editRating !== meta.rating) {
-      setRating(recipe.id, editRating);
-      const updatedMeta = getRecipeMeta(recipe.id);
-      setMeta(updatedMeta);
+    setSaveError(null);
+    setIsSaving(true);
+    try {
+      const updated = { ...recipe, title: editTitle, genre: editGenre, blocks: pendingBlocks };
+      await updateRecipe(updated);
+      setRecipe(updated);
+      // save rating change
+      if (editRating !== meta.rating) {
+        setRating(recipe.id, editRating);
+        const updatedMeta = getRecipeMeta(recipe.id);
+        setMeta(updatedMeta);
+      }
+      setShowSaveConfirm(false);
+      setIsEditing(false);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "保存中にエラーが発生しました。");
+    } finally {
+      setIsSaving(false);
     }
-    setShowSaveConfirm(false);
-    setIsEditing(false);
   }
 
   async function executeDelete() {
     if (!recipe) return;
-    await deleteRecipe(recipe.id);
-    router.push("/");
+    setSaveError(null);
+    setIsDeleting(true);
+    try {
+      await deleteRecipe(recipe.id);
+      router.push("/");
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "削除中にエラーが発生しました。");
+      setShowDeleteConfirm(false);
+    } finally {
+      setIsDeleting(false);
+    }
   }
 
   function toggleStep(id: string) {
@@ -214,7 +264,24 @@ export default function RecipePage() {
     }
   }
 
-  if (!recipe) return null;
+  if (!recipe) {
+    if (loadError) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center px-6 text-center" style={{ background: "var(--bg)" }}>
+          <p className="font-semibold text-sm mb-2" style={{ color: "#DC2626" }}>読み込みに失敗しました</p>
+          <p className="text-xs leading-relaxed mb-6" style={{ color: "var(--text-secondary)" }}>{loadError}</p>
+          <button
+            onClick={() => router.push("/")}
+            className="press-effect px-5 py-2.5 rounded-xl text-sm font-semibold"
+            style={{ background: "var(--accent)", color: "#fff" }}
+          >
+            一覧に戻る
+          </button>
+        </div>
+      );
+    }
+    return null;
+  }
 
   const heroPhotos = recipe.blocks.filter((b) => b.type === "hero") as { id: string; type: "hero"; base64: string }[];
   const nonHeroBlocks = recipe.blocks.filter((b) => b.type !== "hero");
@@ -405,7 +472,7 @@ export default function RecipePage() {
 
             {/* Delete */}
             <button
-              onClick={() => setShowDeleteConfirm(true)}
+              onClick={() => { setSaveError(null); setShowDeleteConfirm(true); }}
               className="press-effect mt-4 mx-auto block text-xs font-medium px-4 py-2 rounded-xl"
               style={{ color: "#DC2626", background: "transparent", border: "1px solid #FECACA" }}
             >
@@ -416,6 +483,13 @@ export default function RecipePage() {
         ) : (
           /* ═══ 表示モード ═══ */
           <>
+            {isOffline && (
+              <div className="mx-5 mt-4 px-4 py-3 rounded-xl" style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }}>
+                <p className="text-xs leading-relaxed" style={{ color: "#92400E" }}>
+                  ⚠️ Supabaseに接続できないため、保存済みのキャッシュを表示しています。編集内容は保存できません。
+                </p>
+              </div>
+            )}
             {/* Title section */}
             <div className="px-5 pt-5 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
               <div className="flex items-start gap-3 justify-between mb-2">
@@ -559,12 +633,18 @@ export default function RecipePage() {
             <div className="w-10 h-1 rounded-full mx-auto mb-5" style={{ background: "var(--border)" }} />
             <p className="text-base font-black mb-1" style={{ color: "var(--text-primary)" }}>レシピを削除しますか？</p>
             <p className="text-sm mb-6" style={{ color: "var(--text-secondary)" }}>削除すると元に戻せません。</p>
+            {saveError && (
+              <div className="mb-4 px-4 py-3 rounded-xl" style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}>
+                <p className="text-xs leading-relaxed" style={{ color: "#DC2626" }}>{saveError}</p>
+              </div>
+            )}
             <button
               onClick={executeDelete}
+              disabled={isDeleting}
               className="press-effect w-full py-3.5 rounded-2xl text-sm font-semibold mb-3"
-              style={{ background: "#DC2626", color: "#fff" }}
+              style={{ background: "#DC2626", color: "#fff", opacity: isDeleting ? 0.6 : 1 }}
             >
-              削除する
+              {isDeleting ? "削除中..." : "削除する"}
             </button>
             <button
               onClick={() => setShowDeleteConfirm(false)}
@@ -591,12 +671,18 @@ export default function RecipePage() {
                 </li>
               ))}
             </ul>
+            {saveError && (
+              <div className="mb-4 px-4 py-3 rounded-xl" style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}>
+                <p className="text-xs leading-relaxed" style={{ color: "#DC2626" }}>{saveError}</p>
+              </div>
+            )}
             <button
               onClick={executeSave}
+              disabled={isSaving}
               className="press-effect w-full py-3.5 rounded-2xl text-sm font-semibold mb-3"
-              style={{ background: "var(--accent)", color: "#fff" }}
+              style={{ background: "var(--accent)", color: "#fff", opacity: isSaving ? 0.6 : 1 }}
             >
-              保存する
+              {isSaving ? "保存中..." : "保存する"}
             </button>
             <button
               onClick={() => setShowSaveConfirm(false)}

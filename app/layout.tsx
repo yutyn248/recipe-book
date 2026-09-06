@@ -23,6 +23,7 @@ export default function RootLayout({
     <html lang="ja" className="h-full">
       <head>
         <link rel="manifest" href="/manifest.json" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </head>
       <body className="min-h-full bg-[#FAFAF8]">
         {children}
