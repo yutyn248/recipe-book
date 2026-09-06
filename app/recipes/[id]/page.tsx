@@ -668,7 +668,9 @@ export default function RecipePage() {
 function HeroGallery({ photos }: { photos: string[] }) {
   if (photos.length === 1) {
     return (
-      <img src={photos[0]} alt="完成写真" className="w-full rounded-2xl card-shadow" />
+      <div className="rounded-2xl overflow-hidden card-shadow" style={{ aspectRatio: "4/3" }}>
+        <img src={photos[0]} alt="完成写真" className="w-full h-full object-cover" />
+      </div>
     );
   }
 
