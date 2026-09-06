@@ -21,7 +21,7 @@ export default function Home() {
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [sortMode, setSortMode] = useState<"genre" | "new">("genre");
+  const [sortMode, setSortMode] = useState<"genre" | "new" | "updated">("genre");
   const [showSortSheet, setShowSortSheet] = useState(false);
 
   useEffect(() => {
@@ -93,11 +93,38 @@ export default function Home() {
 
   const allGenres: Array<Genre | "すべて"> = ["すべて", ...GENRES];
 
-  // ジャンル順表示用：GENRESの定義順にグループ化（genreがnullのものは「その他」に含める）
-  const groupedByGenre = GENRES.map((g) => ({
-    genre: g,
-    recipes: filtered.filter((r) => (r.genre ?? "その他") === g),
-  })).filter((group) => group.recipes.length > 0);
+  // カテゴリ（ジャンル）ごとにグループ化する。genreがnullのものは「その他」に含める。
+  // itemKeyで各グループ内のレシピの並び順を決め、グループ自体の並び順はsortGroupsByLatestで制御する。
+  const createdAtOf = (r: Recipe) => new Date(r.createdAt).getTime();
+  const lastTouchedAt = (r: Recipe) => new Date(r.updatedAt ?? r.createdAt).getTime();
+
+  function groupRecipes(itemKey: (r: Recipe) => number, sortGroupsByLatest: boolean) {
+    const groups = GENRES.map((g) => {
+      const groupRecipes = filtered
+        .filter((r) => (r.genre ?? "その他") === g)
+        .slice()
+        .sort((a, b) => itemKey(b) - itemKey(a));
+      return {
+        genre: g,
+        recipes: groupRecipes,
+        latest: groupRecipes.length > 0 ? itemKey(groupRecipes[0]) : -Infinity,
+      };
+    }).filter((group) => group.recipes.length > 0);
+
+    if (sortGroupsByLatest) {
+      groups.sort((a, b) => b.latest - a.latest);
+    }
+    return groups;
+  }
+
+  // ジャンル順: グループはGENRESの定義順、グループ内は作成日が新しい順
+  // New: グループを「一番新しく追加されたレシピがあるジャンル」順に並べ替え
+  // 更新順: グループを「一番最近更新（または未更新なら作成）されたレシピがあるジャンル」順に並べ替え
+  const displayGroups = sortMode === "genre"
+    ? groupRecipes(createdAtOf, false)
+    : sortMode === "new"
+      ? groupRecipes(createdAtOf, true)
+      : groupRecipes(lastTouchedAt, true);
 
   // 重複タイトル検出
   const titleCounts = recipes.reduce<Record<string, number>>((acc, r) => {
@@ -207,7 +234,7 @@ export default function Home() {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 6h18M6 12h12M10 18h4" />
             </svg>
-            {sortMode === "genre" ? "ジャンル順" : "New"}
+            {sortMode === "genre" ? "ジャンル順" : sortMode === "updated" ? "更新順" : "New"}
           </button>
           <button
             onClick={() => setShowGenreSheet(true)}
@@ -258,14 +285,11 @@ export default function Home() {
       <main className="px-4 pt-4 pb-36">
         {isLoading ? (
           /* 読み込み中スケルトン（「空状態」と誤認しないよう区別する） */
-          <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2">
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="rounded-2xl overflow-hidden animate-pulse" style={{ background: "var(--surface)" }}>
-                <div style={{ aspectRatio: "4/3", background: "var(--border)" }} />
-                <div className="p-3 space-y-2">
-                  <div className="h-3 rounded" style={{ background: "var(--border)", width: "80%" }} />
-                  <div className="h-3 rounded" style={{ background: "var(--border)", width: "50%" }} />
-                </div>
+              <div key={i} className="rounded-2xl p-4 animate-pulse space-y-2" style={{ background: "var(--surface)" }}>
+                <div className="h-3 rounded" style={{ background: "var(--border)", width: "60%" }} />
+                <div className="h-3 rounded" style={{ background: "var(--border)", width: "35%" }} />
               </div>
             ))}
           </div>
@@ -313,10 +337,10 @@ export default function Home() {
               </button>
             )}
           </div>
-        ) : sortMode === "genre" ? (
-          /* ジャンル順：カテゴリ見出し＋1列表示 */
+        ) : (
+          /* カテゴリ見出し（ジャンル名＋件数）＋1列表示 */
           <div className="space-y-5">
-            {groupedByGenre.map((group) => (
+            {displayGroups.map((group) => (
               <div key={group.genre}>
                 <h2 className="text-sm font-black mb-2 px-1" style={{ color: "var(--text-primary)" }}>
                   {group.genre}（{group.recipes.length}）
@@ -327,12 +351,6 @@ export default function Home() {
                   ))}
                 </div>
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {filtered.map((recipe) => (
-              <RecipeCard key={recipe.id} recipe={recipe} meta={allMeta[recipe.id]} isDuplicate={duplicateTitles.has(recipe.title)} />
             ))}
           </div>
         )}
@@ -366,6 +384,7 @@ export default function Home() {
             <div className="pb-safe">
               {([
                 { key: "genre" as const, label: "ジャンル順" },
+                { key: "updated" as const, label: "更新順" },
                 { key: "new" as const, label: "New（新着順）" },
               ]).map(({ key, label }) => (
                 <button
