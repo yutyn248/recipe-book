@@ -195,7 +195,7 @@ function BlockItem({
         ctx.translate(canvas.width / 2, canvas.height / 2);
         ctx.rotate(Math.PI / 2);
         ctx.drawImage(img, -img.width / 2, -img.height / 2);
-        onUpdate({ id: photoBlock.id, type: "photo", base64: canvas.toDataURL("image/jpeg", 0.72) });
+        onUpdate({ id: photoBlock.id, type: "photo", base64: canvas.toDataURL("image/jpeg", 0.6) });
       };
       img.src = photoBlock.base64;
     };
@@ -430,7 +430,8 @@ export default function BlockEditor({
           reader.onerror = reject;
           reader.readAsDataURL(file);
         });
-        const base64 = await resizeImage(raw, 1200);
+        // 工程写真は一覧上ではサムネイル表示のみで、上限なく追加できるためファイルサイズを抑える
+        const base64 = await resizeImage(raw, 800, 0.6);
         newBlocks.push({ id: crypto.randomUUID(), type: "photo", base64 });
       }
       onChange([...blocks, ...newBlocks]);
