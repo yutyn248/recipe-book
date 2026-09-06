@@ -50,7 +50,7 @@ export default function RecipePage() {
     setEditRating(m.rating);
   }
 
-  /** キャッシュ（一覧画面が保存したもの）から該当レシピを探す。オフライン時のフォールバック用 */
+  /** キャッシュ（一覧画面が保存したもの）から該当レシピを探す */
   function findInCache(id: string): Recipe | null {
     try {
       const cached = localStorage.getItem("recipes_cache");
@@ -63,16 +63,22 @@ export default function RecipePage() {
   }
 
   useEffect(() => {
+    const id = params.id as string;
+
+    // 一覧画面のキャッシュがあれば通信を待たず即座に表示する（体感速度優先）
+    const cached = findInCache(id);
+    if (cached) applyRecipe(cached);
+
+    // 裏で最新データを取得し、編集などがあれば静かに反映する
     (async () => {
       try {
-        const r = await getRecipeById(params.id as string);
+        const r = await getRecipeById(id);
         if (!r) { router.push("/"); return; }
         applyRecipe(r);
+        setIsOffline(false);
       } catch (e) {
-        // Supabaseに繋がらない場合は、一覧画面のキャッシュから表示できないか試す
-        const cached = findInCache(params.id as string);
         if (cached) {
-          applyRecipe(cached);
+          // すでにキャッシュを表示できているので、オフライン注記のみ出す
           setIsOffline(true);
         } else {
           setLoadError(e instanceof Error ? e.message : "読み込みに失敗しました。");
