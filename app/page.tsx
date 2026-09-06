@@ -21,6 +21,8 @@ export default function Home() {
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [sortMode, setSortMode] = useState<"genre" | "new">("genre");
+  const [showSortSheet, setShowSortSheet] = useState(false);
 
   useEffect(() => {
     setShoppingCount(getShoppingItems().filter((i) => !i.checked).length);
@@ -90,6 +92,12 @@ export default function Home() {
     });
 
   const allGenres: Array<Genre | "すべて"> = ["すべて", ...GENRES];
+
+  // ジャンル順表示用：GENRESの定義順にグループ化（genreがnullのものは「その他」に含める）
+  const groupedByGenre = GENRES.map((g) => ({
+    genre: g,
+    recipes: filtered.filter((r) => (r.genre ?? "その他") === g),
+  })).filter((group) => group.recipes.length > 0);
 
   // 重複タイトル検出
   const titleCounts = recipes.reduce<Record<string, number>>((acc, r) => {
@@ -191,6 +199,16 @@ export default function Home() {
       {/* Genre filter button */}
       {recipes.length > 0 && (
         <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setShowSortSheet(true)}
+            className="press-effect flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold"
+            style={{ background: "var(--surface)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18M6 12h12M10 18h4" />
+            </svg>
+            {sortMode === "genre" ? "ジャンル順" : "New"}
+          </button>
           <button
             onClick={() => setShowGenreSheet(true)}
             className="press-effect flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-semibold"
@@ -295,6 +313,22 @@ export default function Home() {
               </button>
             )}
           </div>
+        ) : sortMode === "genre" ? (
+          /* ジャンル順：カテゴリ見出し＋1列表示 */
+          <div className="space-y-5">
+            {groupedByGenre.map((group) => (
+              <div key={group.genre}>
+                <h2 className="text-sm font-black mb-2 px-1" style={{ color: "var(--text-primary)" }}>
+                  {group.genre}（{group.recipes.length}）
+                </h2>
+                <div className="space-y-2">
+                  {group.recipes.map((recipe) => (
+                    <RecipeCard key={recipe.id} recipe={recipe} meta={allMeta[recipe.id]} isDuplicate={duplicateTitles.has(recipe.title)} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             {filtered.map((recipe) => (
@@ -317,6 +351,41 @@ export default function Home() {
               <span className="text-lg font-light leading-none">+</span>
               レシピを追加
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 並び替え選択シート */}
+      {showSortSheet && (
+        <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.35)" }} onClick={() => setShowSortSheet(false)}>
+          <div className="w-full rounded-t-3xl" style={{ background: "var(--bg)" }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 rounded-full" style={{ background: "var(--border)" }} />
+            </div>
+            <p className="text-sm font-bold px-5 pt-2 pb-3" style={{ color: "var(--text-secondary)" }}>並び替え</p>
+            <div className="pb-safe">
+              {([
+                { key: "genre" as const, label: "ジャンル順" },
+                { key: "new" as const, label: "New（新着順）" },
+              ]).map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => { setSortMode(key); setShowSortSheet(false); }}
+                  className="press-effect w-full flex items-center justify-between px-5 py-3.5 text-left"
+                  style={{ borderTop: "1px solid var(--border)" }}
+                >
+                  <span className="text-sm font-medium" style={{ color: sortMode === key ? "var(--accent)" : "var(--text-primary)" }}>
+                    {label}
+                  </span>
+                  {sortMode === key && (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)" }}>
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
+                </button>
+              ))}
+              <div className="h-6" />
+            </div>
           </div>
         </div>
       )}

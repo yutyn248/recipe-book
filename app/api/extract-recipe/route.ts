@@ -164,7 +164,7 @@ const FIRST_PAGE_PROMPT = `料理本のページまたはレシピサイトの�
 
 複数レシピの場合: {"recipes":[{"title":"レシピ1","genre":"和食","ingredients":[...],"steps":[...]},{"title":"レシピ2","genre":"洋食","ingredients":[...],"steps":[...]}]}
 
-genreは以下から最も適切なものを1つ：和食, 洋食, 中華, イタリアン, 韓国料理, 肉・魚メイン, 麺・ごはん, スープ・汁物, サラダ・和え物, デザート・スイーツ`;
+genreは以下から最も適切なものを1つ：和食, 洋食, 中華, イタリアン, 韓国料理, メイン, 麺, ご飯, スープ・汁物, 副菜, デザート・スイーツ`;
 
 /** 2枚目以降の精錬プロンプト */
 function buildRefinePrompt(accumulatedJson: string, pageNum: number, totalPages: number): string {
