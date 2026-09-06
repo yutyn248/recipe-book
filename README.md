@@ -65,7 +65,13 @@ GEMINI_API_KEY=your-gemini-api-key
 > - Supabase: Dashboard → Project Settings → API から取得
 > - Gemini: [Google AI Studio](https://aistudio.google.com/apikey) で無料発行（カード登録なしで利用可能）
 
-### 3. 開発サーバー起動
+### 3. DBの初期化
+
+Supabaseプロジェクトの SQL Editor で `supabase/migrations/0001_create_recipes_table.sql` の内容を実行し、`recipes` テーブルを作成する。
+
+> Supabaseの無料プランは一定期間アクセスがないと自動的にプロジェクトが一時停止（Pause）される。再開は無料プランの制限で不可な場合があるため、長期間アクセスしない場合は要注意。
+
+### 4. 開発サーバー起動
 
 ```bash
 npm run dev
@@ -73,7 +79,7 @@ npm run dev
 
 http://localhost:3000 で確認
 
-### 4. 動作確認
+### 5. 動作確認
 
 1. 「レシピを追加」ボタンをタップ
 2. 料理本のページを撮影またはファイルをアップロード
