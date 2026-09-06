@@ -11,7 +11,7 @@ import { detectBlur, detectBrightness } from "@/lib/blur-detection";
 import { cropPhoto, resizeWithOrientation } from "@/lib/crop-photo";
 import { saveRecipe } from "@/lib/storage";
 import { Block } from "@/types/block";
-import { GENRES, Genre } from "@/types/recipe";
+import { GENRES, Genre, Recipe } from "@/types/recipe";
 import BlockEditor from "./BlockEditor";
 
 const BLUR_THRESHOLD = 50;
@@ -35,7 +35,7 @@ interface PageEntry {
 
 interface UploadModalProps {
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (savedRecipes: Recipe[]) => void;
   existingTitles: string[];
 }
 
@@ -376,7 +376,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     setErrorCode(null);
     setIsSaving(true);
     try {
-      await saveRecipe({
+      const newRecipe: Recipe = {
         id: crypto.randomUUID(),
         title,
         genre,
@@ -384,9 +384,10 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
         // URL経由の場合はURLをevidenceとして保存、写真の場合はbase64を保存
         originalImages: extractedUrl ? [extractedUrl] : pages.map((p) => p.base64),
         createdAt: new Date().toISOString(),
-      });
+      };
+      await saveRecipe(newRecipe);
       setStep("done");
-      setTimeout(() => onSaved(), 800);
+      setTimeout(() => onSaved([newRecipe]), 800);
     } catch (e) {
       setError(e instanceof Error ? e.message : "保存中にエラーが発生しました。");
       setErrorCode("SAVE_ERROR");
@@ -405,31 +406,13 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
   const showDots = step !== "done" && step !== "multi-confirm";
 
   return (
-    <div className="fixed inset-0 z-50">
-      {/* Dark scrim */}
-      <div
-        className="absolute inset-0 backdrop-blur-sm"
-        style={{ background: "rgba(26,23,18,0.65)" }}
-        onClick={step === "select" ? onClose : undefined}
-      />
+    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: "var(--surface)" }}>
+      <div className="safe-top flex-shrink-0" />
 
-      {/* Bottom sheet */}
-      <div
-        className="absolute bottom-0 left-0 right-0 rounded-t-3xl overflow-hidden"
-        style={{ maxHeight: "94vh", background: "var(--surface)" }}
-      >
-        {/* Pull handle */}
-        <div className="flex justify-center pt-3 pb-1">
-          <div className="w-9 h-1 rounded-full" style={{ background: "#E0DBD5" }} />
-        </div>
+      {/* Step dots */}
+      {showDots && <div className="flex-shrink-0"><StepDots current={dotIndex} /></div>}
 
-        {/* Step dots */}
-        {showDots && <StepDots current={dotIndex} />}
-
-        <div
-          className="overflow-y-auto hide-scrollbar"
-          style={{ maxHeight: "calc(94vh - 40px)" }}
-        >
+      <div className="overflow-y-auto hide-scrollbar flex-1 min-h-0">
 
           {/* ════════════════════════════════
               STEP: SELECT
@@ -952,6 +935,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                     setErrorCode(null);
                     setIsSaving(true);
                     try {
+                      const newRecipes: Recipe[] = [];
                       for (const r of multiRecipes) {
                         const blocks: Block[] = [];
                         if (r.ingredients.length > 0) {
@@ -960,17 +944,19 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                         for (const s of r.steps) {
                           blocks.push({ id: crypto.randomUUID(), type: "step", text: s });
                         }
-                        await saveRecipe({
+                        const newRecipe: Recipe = {
                           id: crypto.randomUUID(),
                           title: r.title || "不明な料理",
                           genre: r.genre,
                           blocks,
                           originalImages: extractedUrl ? [extractedUrl] : pages.map((p) => p.base64),
                           createdAt: new Date().toISOString(),
-                        });
+                        };
+                        await saveRecipe(newRecipe);
+                        newRecipes.push(newRecipe);
                       }
                       setStep("done");
-                      setTimeout(() => onSaved(), 800);
+                      setTimeout(() => onSaved(newRecipes), 800);
                     } catch (e) {
                       setError(e instanceof Error ? e.message : "保存中にエラーが発生しました。");
                       setErrorCode("SAVE_ERROR");
@@ -1153,7 +1139,6 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
           )}
 
         </div>
-      </div>
     </div>
   );
 }

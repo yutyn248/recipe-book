@@ -20,6 +20,7 @@ export default function Home() {
   const [allMeta, setAllMeta] = useState<Record<string, RecipeMeta>>({});
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     setShoppingCount(getShoppingItems().filter((i) => !i.checked).length);
@@ -44,6 +45,8 @@ export default function Home() {
     if (cached) {
       try { setRecipes(JSON.parse(cached)); } catch { /* 壊れたキャッシュは無視 */ }
     }
+    // キャッシュの有無を確認し終えた時点で「空状態」と「読み込み中」を区別できるようにする
+    setIsLoading(false);
 
     // Supabaseから最新を取得して更新
     try {
@@ -60,8 +63,16 @@ export default function Home() {
     loadRecipes();
   }, []);
 
-  function handleRecipeSaved() {
-    loadRecipes();
+  function handleRecipeSaved(savedRecipes: Recipe[]) {
+    // 保存自体は既に成功しているので、その場で一覧に反映する。
+    // 直後にSupabaseへ再取得すると、書き込み直後の読み取りに若干のラグが生じて
+    // 保存したはずのレシピが一時的に一覧から消えて見えることがあるため、
+    // ここでは再取得せず、次回アクセス時の自然な同期に任せる。
+    setRecipes((prev) => {
+      const merged = [...savedRecipes, ...prev.filter((r) => !savedRecipes.some((s) => s.id === r.id))];
+      localStorage.setItem("recipes_cache", JSON.stringify(merged));
+      return merged;
+    });
     setShowModal(false);
   }
 
@@ -227,7 +238,20 @@ export default function Home() {
       )}
 
       <main className="px-4 pt-4 pb-36">
-        {recipes.length === 0 ? (
+        {isLoading ? (
+          /* 読み込み中スケルトン（「空状態」と誤認しないよう区別する） */
+          <div className="grid grid-cols-2 gap-3">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="rounded-2xl overflow-hidden animate-pulse" style={{ background: "var(--surface)" }}>
+                <div style={{ aspectRatio: "4/3", background: "var(--border)" }} />
+                <div className="p-3 space-y-2">
+                  <div className="h-3 rounded" style={{ background: "var(--border)", width: "80%" }} />
+                  <div className="h-3 rounded" style={{ background: "var(--border)", width: "50%" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : recipes.length === 0 ? (
           /* Empty state */
           <div className="flex flex-col items-center justify-center min-h-[65vh] text-center px-6">
             <div
