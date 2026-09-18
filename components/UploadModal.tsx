@@ -455,29 +455,25 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 className="flex rounded-xl mb-4 p-1"
                 style={{ background: "var(--bg)" }}
               >
-                {(["photo", "url"] as const).map((mode) => (
+                {(["photo", "url", "manual"] as const).map((mode) => (
                   <button
                     key={mode}
-                    onClick={() => { setInputMode(mode); setBlurError(null); setError(null); }}
+                    onClick={() => {
+                      if (mode === "manual") { handleManualCreate(); return; }
+                      setInputMode(mode);
+                      setBlurError(null);
+                      setError(null);
+                    }}
                     className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
                     style={inputMode === mode
                       ? { background: "var(--surface)", color: "var(--text-primary)", boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }
                       : { color: "var(--text-secondary)" }
                     }
                   >
-                    {mode === "photo" ? "写真" : "URLから読み込む"}
+                    {mode === "photo" ? "写真" : mode === "url" ? "URLから読み込む" : "手動"}
                   </button>
                 ))}
               </div>
-
-              {/* 手動作成への導線 */}
-              <button
-                onClick={handleManualCreate}
-                className="w-full mb-4 py-2.5 rounded-xl text-sm font-semibold text-center"
-                style={{ color: "var(--accent)", background: "var(--accent-light)" }}
-              >
-                ＋ 手動で作成する
-              </button>
 
               {/* 品質警告（ソフト）：撮り直しを促しつつ強制はしない */}
               {pendingBatch && (
@@ -774,6 +770,7 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                 {editingTitle ? (
                   <input
                     autoFocus
+                    aria-label="料理名"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     onBlur={() => setEditingTitle(false)}
