@@ -1,0 +1,28 @@
+name: Keep Supabase Alive
+
+# Supabaseの無料プランは7日間アクセスがないとプロジェクトが自動的に一時停止する。
+# このアプリは自分専用で他に裏からアクセスする仕組みがないため、毎日軽いリクエストを
+# 送ってアクセス実績を作り、一時停止を防ぐ。
+
+on:
+  schedule:
+    # 毎日 3:00 UTC (12:00 JST) に実行
+    - cron: "0 3 * * *"
+  workflow_dispatch: {} # 手動実行用
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        run: |
+          status=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/recipes?select=id&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+          echo "HTTP status: $status"
+          cat /tmp/response.json
+          if [ "$status" -ge 400 ]; then
+            echo "::error::Supabaseへのpingに失敗しました (HTTP $status)"
+            exit 1
+          fi
