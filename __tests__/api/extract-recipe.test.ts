@@ -41,6 +41,15 @@ function gemini429Response() {
   };
 }
 
+function gemini503Response() {
+  return {
+    ok: false,
+    status: 503,
+    headers: { get: () => null },
+    json: () => Promise.resolve({ error: { message: "The model is overloaded" } }),
+  };
+}
+
 const validRecipe = (title: string) => ({
   title, genre: "和食", ingredients: ["鶏肉 300g"], steps: ["切る", "焼く"],
 });
@@ -179,7 +188,7 @@ describe("複数ページ処理", () => {
 });
 
 // ── 429 リトライ ────────────────────────────────────────────
-describe("429 レート制限リトライ", () => {
+describe("429・503 リトライ", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -218,6 +227,16 @@ describe("429 レート制限リトライ", () => {
     const body = await res.json();
     expect(body.errorCode).toBe("AI_API_ERROR");
     expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("1回目503 → 2回目成功でリトライが機能する", async () => {
+    mockFetch.mockResolvedValueOnce(gemini503Response());
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify({ recipes: [validRecipe("唐揚げ")] })));
+    const resPromise = POST(makeRequest({ pages: ["img1"] }));
+    await vi.advanceTimersByTimeAsync(10000);
+    const res = await resPromise;
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });
 

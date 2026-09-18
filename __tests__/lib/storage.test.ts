@@ -67,6 +67,14 @@ describe("getRecipes", () => {
     nextResult = { data: null, error: { message: "permission denied" } };
     await expect(getRecipes()).rejects.toThrow(/permission denied/);
   });
+
+  it("一時停止中〜再開処理中に返るCloudflareのHTMLエラーページも一時停止扱いにする", async () => {
+    nextResult = {
+      data: null,
+      error: { message: "<!DOCTYPE html><title>supabase.co | 521: Web server is down</title>" },
+    };
+    await expect(getRecipes()).rejects.toThrow(/一時停止/);
+  });
 });
 
 describe("saveRecipe", () => {

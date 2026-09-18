@@ -57,7 +57,7 @@ type GeminiResult =
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Gemini Vision APIを1枚の画像で呼び出す（429時は自動リトライ） */
+/** Gemini Vision APIを1枚の画像で呼び出す（429・503時は自動リトライ） */
 async function callGeminiVision(
   apiKey: string,
   imageUrl: string,
@@ -90,10 +90,10 @@ async function callGeminiVision(
     return { ok: false, type: "network", msg };
   }
 
-  // 429 レート制限: 待機してリトライ（最大2回）
-  if (res.status === 429 && retryCount < 2) {
+  // 429（レート制限）・503（一時的な過負荷）は待機してリトライ（最大2回）
+  if ((res.status === 429 || res.status === 503) && retryCount < 2) {
     const waitMs = 10000;
-    console.warn(`[RATE_LIMIT] 429 received, waiting ${waitMs}ms before retry ${retryCount + 1}`);
+    console.warn(`[RETRY] ${res.status} received, waiting ${waitMs}ms before retry ${retryCount + 1}`);
     await sleep(waitMs);
     return callGeminiVision(apiKey, imageUrl, promptText, retryCount + 1);
   }

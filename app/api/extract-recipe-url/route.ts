@@ -192,7 +192,10 @@ genreは以下から最も適切なものを1つ：和食, 洋食, 中華, イ�
 --- Webページのテキスト ---
 `;
 
-async function extractWithGemini(apiKey: string, pageText: string) {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** ページ本文をGeminiへ送りレシピ抽出を試みる（429・503時は自動リトライ、最大2回） */
+async function extractWithGemini(apiKey: string, pageText: string, retryCount = 0) {
   const truncated = pageText.slice(0, 12000);
   let res: Response;
   try {
@@ -210,6 +213,13 @@ async function extractWithGemini(apiKey: string, pageText: string) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false as const, type: "network" as const, msg };
+  }
+
+  if ((res.status === 429 || res.status === 503) && retryCount < 2) {
+    const waitMs = 10000;
+    console.warn(`[RETRY] ${res.status} received, waiting ${waitMs}ms before retry ${retryCount + 1}`);
+    await sleep(waitMs);
+    return extractWithGemini(apiKey, pageText, retryCount + 1);
   }
 
   if (!res.ok) {

@@ -8,9 +8,15 @@ import { Recipe } from "@/types/recipe";
  */
 function friendlyError(error: { message?: string } | null | undefined): Error {
   const msg = error?.message ?? "";
-  if (/fetch failed|Failed to fetch|NetworkError|ENOTFOUND/i.test(msg)) {
+  // ネットワーク不通（DNS引けない等）に加え、一時停止中〜再開処理中に返る
+  // CloudflareのHTMLエラーページ（521など）も「一時停止の可能性あり」として扱う。
+  // これらはSupabase/Postgres自体ではなくインフラ層のエラーのため、通常JSONでは返らずHTMLになる。
+  const looksLikePauseOrDown =
+    /fetch failed|Failed to fetch|NetworkError|ENOTFOUND/i.test(msg) ||
+    /<!DOCTYPE|<html|cloudflare|Web server is down|52[0-9]:/i.test(msg);
+  if (looksLikePauseOrDown) {
     return new Error(
-      "Supabaseに接続できませんでした。無料プランは7日間アクセスがないと自動的に一時停止するため、Supabaseダッシュボードでプロジェクトが「一時停止（Paused）」になっていないか確認し、なっていれば「再開（Restore）」を押してください。"
+      "Supabaseに接続できませんでした。無料プランは7日間アクセスがないと自動的に一時停止するため、Supabaseダッシュボードでプロジェクトが「一時停止（Paused）」になっていないか確認し、なっていれば「再開（Restore）」を押してください。再開直後は起動に数分かかることがあるので、その場合は少し待ってから再試行してください。"
     );
   }
   return new Error(`Supabaseでエラーが発生しました（一時停止とは別の問題です）: ${msg || "不明なエラー"}`);

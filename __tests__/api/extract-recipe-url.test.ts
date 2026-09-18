@@ -245,6 +245,38 @@ describe("GeminiAIフォールバック", () => {
   });
 });
 
+// ── 429・503 リトライ ────────────────────────────────────────────
+describe("429・503 リトライ", () => {
+  const plainHtml = "<html><body><p>唐揚げレシピ</p></body></html>";
+  const validAiRecipe = { recipes: [{ title: "唐揚げ", genre: "和食", ingredients: ["鶏肉 300g"], steps: ["切る"] }] };
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("1回目503 → 2回目成功でリトライが機能する", async () => {
+    mockFetch.mockResolvedValueOnce(pageOkResponse(plainHtml));
+    mockFetch.mockResolvedValueOnce(geminiErrorResponse(503, "overloaded"));
+    mockFetch.mockResolvedValueOnce(geminiOkResponse(JSON.stringify(validAiRecipe)));
+    const resPromise = POST(makeRequest({ url: "https://example.com/recipe" }));
+    await vi.advanceTimersByTimeAsync(10000);
+    const res = await resPromise;
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("429が3回連続した場合はリトライ上限でAI_API_ERRORを返す", async () => {
+    mockFetch.mockResolvedValueOnce(pageOkResponse(plainHtml));
+    mockFetch.mockResolvedValue(geminiErrorResponse(429, "rate limited"));
+    const resPromise = POST(makeRequest({ url: "https://example.com/recipe" }));
+    await vi.advanceTimersByTimeAsync(20000);
+    const res = await resPromise;
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.errorCode).toBe("AI_API_ERROR");
+    expect(mockFetch).toHaveBeenCalledTimes(4); // ページ取得1回 + Gemini呼び出し3回（初回+リトライ2回）
+  });
+});
+
 // ── ページ取得エラー ────────────────────────────────────────────
 describe("ページ取得エラー", () => {
   it("ページが404の場合 FETCH_FAILED を返す", async () => {
