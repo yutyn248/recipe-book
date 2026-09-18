@@ -305,6 +305,21 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
     }
   }
 
+  /** AIを使わず、空のレシピから手動で作成を始める */
+  function handleManualCreate() {
+    setTitle("");
+    setGenre(null);
+    setBlocks([
+      { id: crypto.randomUUID(), type: "ingredients", items: [""] },
+      { id: crypto.randomUUID(), type: "step", text: "" },
+    ]);
+    setUrlSource(null);
+    setError(null);
+    setErrorCode(null);
+    setEditingTitle(true);
+    setStep("edit");
+  }
+
   async function handleExtractUrl() {
     const trimmed = urlInput.trim();
     if (!trimmed) return;
@@ -454,6 +469,15 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
                   </button>
                 ))}
               </div>
+
+              {/* 手動作成への導線 */}
+              <button
+                onClick={handleManualCreate}
+                className="w-full mb-4 py-2.5 rounded-xl text-sm font-semibold text-center"
+                style={{ color: "var(--accent)", background: "var(--accent-light)" }}
+              >
+                ＋ 手動で作成する
+              </button>
 
               {/* 品質警告（ソフト）：撮り直しを促しつつ強制はしない */}
               {pendingBatch && (
@@ -827,13 +851,18 @@ export default function UploadModal({ onClose, onSaved, existingTitles }: Upload
               </div>
 
               <div className="px-5">
+                {!title.trim() && (
+                  <p className="text-xs mb-2 font-medium" style={{ color: "#DC2626" }}>
+                    料理名を入力してください
+                  </p>
+                )}
                 <button
                   onClick={handleConfirm}
-                  disabled={isDuplicate(title)}
+                  disabled={isDuplicate(title) || !title.trim()}
                   className="press-effect w-full py-3.5 font-semibold text-base rounded-xl"
                   style={{
-                    background: isDuplicate(title) ? "var(--border)" : "var(--accent)",
-                    color: isDuplicate(title) ? "var(--text-secondary)" : "#fff",
+                    background: isDuplicate(title) || !title.trim() ? "var(--border)" : "var(--accent)",
+                    color: isDuplicate(title) || !title.trim() ? "var(--text-secondary)" : "#fff",
                   }}
                 >
                   確認する →
