@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import SwRegister from "@/components/SwRegister";
+import ChunkErrorReload from "@/components/ChunkErrorReload";
 
 export const metadata: Metadata = {
   title: "マイレシピ帳",
@@ -28,6 +29,7 @@ export default function RootLayout({
       <body className="min-h-full bg-[#FAFAF8]">
         {children}
         <SwRegister />
+        <ChunkErrorReload />
       </body>
     </html>
   );
