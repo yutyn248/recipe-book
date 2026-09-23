@@ -22,9 +22,14 @@ function friendlyError(error: { message?: string } | null | undefined): Error {
   return new Error(`Supabaseでエラーが発生しました（一時停止とは別の問題です）: ${msg || "不明なエラー"}`);
 }
 
+/**
+ * 一覧表示用の軽量版。recipes_listビュー（hero/photoブロックの画像データと
+ * original_imagesを除外したもの）を参照し、データ転送量を大幅に削減する。
+ * 一覧画面は写真を表示しないため、これで表示内容に影響はない。
+ */
 export async function getRecipes(): Promise<Recipe[]> {
   const { data, error } = await supabase
-    .from("recipes")
+    .from("recipes_list")
     .select("*")
     .order("created_at", { ascending: false });
   if (error) throw friendlyError(error);

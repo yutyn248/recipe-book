@@ -8,6 +8,7 @@ import { getRecipes } from "@/lib/storage";
 import { Recipe, GENRES, Genre } from "@/types/recipe";
 import { getShoppingItems } from "@/lib/shopping";
 import { getAllMeta, RecipeMeta } from "@/lib/recipe-meta";
+import { getCachedRecipes, setCachedRecipes } from "@/lib/recipe-cache";
 
 export default function Home() {
   const router = useRouter();
@@ -43,10 +44,7 @@ export default function Home() {
 
   async function loadRecipes() {
     // キャッシュがあれば即時表示
-    const cached = localStorage.getItem("recipes_cache");
-    if (cached) {
-      try { setRecipes(JSON.parse(cached)); } catch { /* 壊れたキャッシュは無視 */ }
-    }
+    setRecipes(getCachedRecipes());
     // キャッシュの有無を確認し終えた時点で「空状態」と「読み込み中」を区別できるようにする
     setIsLoading(false);
 
@@ -54,7 +52,7 @@ export default function Home() {
     try {
       const fresh = await getRecipes();
       setRecipes(fresh);
-      localStorage.setItem("recipes_cache", JSON.stringify(fresh));
+      setCachedRecipes(fresh);
       setSyncError(null);
     } catch (e) {
       setSyncError(e instanceof Error ? e.message : "レシピの読み込みに失敗しました。");
@@ -72,7 +70,7 @@ export default function Home() {
     // ここでは再取得せず、次回アクセス時の自然な同期に任せる。
     setRecipes((prev) => {
       const merged = [...savedRecipes, ...prev.filter((r) => !savedRecipes.some((s) => s.id === r.id))];
-      localStorage.setItem("recipes_cache", JSON.stringify(merged));
+      setCachedRecipes(merged);
       return merged;
     });
     setShowModal(false);

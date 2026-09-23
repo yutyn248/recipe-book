@@ -9,6 +9,7 @@ import BlockEditor from "@/components/BlockEditor";
 import { resizeImage } from "@/lib/crop-photo";
 import AddToShoppingModal from "@/components/AddToShoppingModal";
 import { getRecipeMeta, setFavorite, recordCooked, setRating, RecipeMeta } from "@/lib/recipe-meta";
+import { findRecipeInCache } from "@/lib/recipe-cache";
 
 export default function RecipePage() {
   const params = useParams();
@@ -50,23 +51,11 @@ export default function RecipePage() {
     setEditRating(m.rating);
   }
 
-  /** キャッシュ（一覧画面が保存したもの）から該当レシピを探す */
-  function findInCache(id: string): Recipe | null {
-    try {
-      const cached = localStorage.getItem("recipes_cache");
-      if (!cached) return null;
-      const list: Recipe[] = JSON.parse(cached);
-      return list.find((r) => r.id === id) ?? null;
-    } catch {
-      return null;
-    }
-  }
-
   useEffect(() => {
     const id = params.id as string;
 
     // 一覧画面のキャッシュがあれば通信を待たず即座に表示する（体感速度優先）
-    const cached = findInCache(id);
+    const cached = findRecipeInCache(id);
     if (cached) applyRecipe(cached);
 
     // 裏で最新データを取得し、編集などがあれば静かに反映する
